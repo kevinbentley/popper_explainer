@@ -1,0 +1,89 @@
+[
+  {
+    "schema_version": "1.0.0",
+    "law_id": "U1_requires_missing_observable_collision_events",
+    "template": "bound",
+    "quantifiers": { "T": 20 },
+    "preconditions": [
+      { "lhs": "grid_length", "op": ">=", "rhs": 4 }
+    ],
+    "observables": [
+      { "name": "collision_events", "expr": "collision_events" }
+    ],
+    "claim": "collision_events(t) <= 100",
+    "forbidden": "exists t where collision_events(t) > 100",
+    "bound_value": 100,
+    "bound_op": "<=",
+    "proposed_tests": [
+      { "family": "random_density_sweep", "params": { "cases": 50, "densities": [0.3, 0.6] } }
+    ],
+    "capability_requirements": { "missing_observables": ["collision_events"], "missing_transforms": [], "missing_generators": [] }
+  },
+  {
+    "schema_version": "1.0.0",
+    "law_id": "U2_requires_missing_transform_rotate_2d",
+    "template": "symmetry_commutation",
+    "quantifiers": { "T": 10 },
+    "preconditions": [],
+    "observables": [],
+    "transform": "rotate_2d",
+    "claim": "commutes(transform='rotate_2d')",
+    "forbidden": "exists t where evolve(rotate_2d(S), t) != rotate_2d(evolve(S, t))",
+    "proposed_tests": [
+      { "family": "symmetry_metamorphic_suite", "params": { "cases": 10, "transform": "rotate_2d" } }
+    ],
+    "capability_requirements": { "missing_observables": [], "missing_transforms": ["rotate_2d"], "missing_generators": [] }
+  },
+  {
+    "schema_version": "1.0.0",
+    "law_id": "U3_ambiguous_claim_uses_indexing",
+    "template": "implication_state",
+    "quantifiers": { "T": 10 },
+    "preconditions": [],
+    "observables": [
+      { "name": "cell0", "expr": "state[0]" }
+    ],
+    "claim": "cell0(t) == '.' -> cell0(t) == '.'",
+    "forbidden": "exists t where cell0(t) == '.' and cell0(t) != '.'",
+    "proposed_tests": [
+      { "family": "random_density_sweep", "params": { "cases": 10, "densities": [0.3] } }
+    ],
+    "capability_requirements": { "missing_observables": ["cell0"], "missing_transforms": [], "missing_generators": [] }
+  },
+  {
+    "schema_version": "1.0.0",
+    "law_id": "U4_unmet_preconditions_impossible_grid",
+    "template": "invariant",
+    "quantifiers": { "T": 10 },
+    "preconditions": [
+      { "lhs": "grid_length", "op": "<", "rhs": 0 }
+    ],
+    "observables": [
+      { "name": "occupied_cells", "expr": "count('>') + count('<') + count('X')" }
+    ],
+    "claim": "occupied_cells(t) == occupied_cells(0)",
+    "forbidden": "exists t where occupied_cells(t) != occupied_cells(0)",
+    "proposed_tests": [
+      { "family": "random_density_sweep", "params": { "cases": 10, "densities": [0.3] } }
+    ],
+    "capability_requirements": { "missing_observables": [], "missing_transforms": [], "missing_generators": [] }
+  },
+  {
+    "schema_version": "1.0.0",
+    "law_id": "U5_resource_limit_huge_T",
+    "template": "invariant",
+    "quantifiers": { "T": 1000000 },
+    "preconditions": [
+      { "lhs": "grid_length", "op": ">=", "rhs": 4 }
+    ],
+    "observables": [
+      { "name": "particle_count", "expr": "count('>') + count('<') + 2*count('X')" }
+    ],
+    "claim": "particle_count(t) == particle_count(0)",
+    "forbidden": "exists t where particle_count(t) != particle_count(0)",
+    "proposed_tests": [
+      { "family": "random_density_sweep", "params": { "cases": 10, "densities": [0.3] } }
+    ],
+    "capability_requirements": { "missing_observables": [], "missing_transforms": [], "missing_generators": [] }
+  }
+]

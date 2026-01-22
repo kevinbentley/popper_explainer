@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0.0",
+  "universe_id": "kinetic_grid_v1",
+  "symbols": [".", ">", "<", "X"],
+  "state_representation": "string",
+  "capabilities": {
+    "primitive_observables": ["count(symbol)", "grid_length"],
+    "derived_observables_allowed": true,
+    "transforms": ["mirror_swap", "mirror_only", "swap_only", "shift_k"],
+    "generator_families": [
+      "random_density_sweep",
+      "constrained_pair_interactions",
+      "edge_wrapping_cases",
+      "symmetry_metamorphic_suite",
+      "adversarial_mutation_search"
+    ]
+  },
+  "config_knobs": {
+    "grid_length_range": [4, 200],
+    "boundary_types": ["periodic"]
+  }
+}

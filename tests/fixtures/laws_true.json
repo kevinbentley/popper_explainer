@@ -1,0 +1,97 @@
+[
+  {
+    "schema_version": "1.0.0",
+    "law_id": "T1_right_component_conservation",
+    "template": "invariant",
+    "quantifiers": { "T": 60 },
+    "preconditions": [
+      { "lhs": "grid_length", "op": ">=", "rhs": 4 }
+    ],
+    "observables": [
+      { "name": "R_total", "expr": "count('>') + count('X')" }
+    ],
+    "claim": "R_total(t) == R_total(0)",
+    "forbidden": "exists t where R_total(t) != R_total(0)",
+    "proposed_tests": [
+      { "family": "random_density_sweep", "params": { "cases": 150, "densities": [0.1, 0.3, 0.6] } },
+      { "family": "constrained_pair_interactions", "params": { "cases": 50 } }
+    ],
+    "capability_requirements": { "missing_observables": [], "missing_transforms": [], "missing_generators": [] }
+  },
+  {
+    "schema_version": "1.0.0",
+    "law_id": "T2_left_component_conservation",
+    "template": "invariant",
+    "quantifiers": { "T": 60 },
+    "preconditions": [
+      { "lhs": "grid_length", "op": ">=", "rhs": 4 }
+    ],
+    "observables": [
+      { "name": "L_total", "expr": "count('<') + count('X')" }
+    ],
+    "claim": "L_total(t) == L_total(0)",
+    "forbidden": "exists t where L_total(t) != L_total(0)",
+    "proposed_tests": [
+      { "family": "random_density_sweep", "params": { "cases": 150, "densities": [0.1, 0.3, 0.6] } },
+      { "family": "constrained_pair_interactions", "params": { "cases": 50 } }
+    ],
+    "capability_requirements": { "missing_observables": [], "missing_transforms": [], "missing_generators": [] }
+  },
+  {
+    "schema_version": "1.0.0",
+    "law_id": "T3_particle_count_conservation",
+    "template": "invariant",
+    "quantifiers": { "T": 60 },
+    "preconditions": [
+      { "lhs": "grid_length", "op": ">=", "rhs": 4 }
+    ],
+    "observables": [
+      { "name": "particle_count", "expr": "count('>') + count('<') + 2*count('X')" }
+    ],
+    "claim": "particle_count(t) == particle_count(0)",
+    "forbidden": "exists t where particle_count(t) != particle_count(0)",
+    "proposed_tests": [
+      { "family": "random_density_sweep", "params": { "cases": 200, "densities": [0.1, 0.3, 0.6] } }
+    ],
+    "capability_requirements": { "missing_observables": [], "missing_transforms": [], "missing_generators": [] }
+  },
+  {
+    "schema_version": "1.0.0",
+    "law_id": "T4_momentum_conservation",
+    "template": "invariant",
+    "quantifiers": { "T": 60 },
+    "preconditions": [
+      { "lhs": "grid_length", "op": ">=", "rhs": 4 }
+    ],
+    "observables": [
+      {
+        "name": "momentum",
+        "expr": "(count('>') + count('X')) - (count('<') + count('X'))"
+      }
+    ],
+    "claim": "momentum(t) == momentum(0)",
+    "forbidden": "exists t where momentum(t) != momentum(0)",
+    "proposed_tests": [
+      { "family": "random_density_sweep", "params": { "cases": 200, "densities": [0.1, 0.3, 0.6] } },
+      { "family": "constrained_pair_interactions", "params": { "cases": 50 } }
+    ],
+    "capability_requirements": { "missing_observables": [], "missing_transforms": [], "missing_generators": [] }
+  },
+  {
+    "schema_version": "1.0.0",
+    "law_id": "T5_full_mirror_symmetry_commutation",
+    "template": "symmetry_commutation",
+    "quantifiers": { "T": 40 },
+    "preconditions": [
+      { "lhs": "grid_length", "op": ">=", "rhs": 4 }
+    ],
+    "observables": [],
+    "transform": "mirror_swap",
+    "claim": "commutes(transform='mirror_swap')",
+    "forbidden": "exists t where evolve(mirror_swap(S), t) != mirror_swap(evolve(S, t))",
+    "proposed_tests": [
+      { "family": "symmetry_metamorphic_suite", "params": { "cases": 200, "transform": "mirror_swap" } }
+    ],
+    "capability_requirements": { "missing_observables": [], "missing_transforms": [], "missing_generators": [] }
+  }
+]

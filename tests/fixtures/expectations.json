@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0.0",
+  "expected": [
+    { "law_id": "T1_right_component_conservation", "status": "PASS" },
+    { "law_id": "T2_left_component_conservation", "status": "PASS" },
+    { "law_id": "T3_particle_count_conservation", "status": "PASS" },
+    { "law_id": "T4_momentum_conservation", "status": "PASS" },
+    { "law_id": "T5_full_mirror_symmetry_commutation", "status": "PASS" },
+
+    { "law_id": "F1_collision_count_conserved", "status": "FAIL" },
+    { "law_id": "F2_occupied_cells_conserved", "status": "FAIL" },
+    { "law_id": "F3_spatial_mirror_only_is_symmetry", "status": "FAIL" },
+    { "law_id": "F4_swap_only_is_symmetry", "status": "FAIL" },
+
+    { "law_id": "U1_requires_missing_observable_collision_events", "status": "UNKNOWN", "reason_code": "missing_observable" },
+    { "law_id": "U2_requires_missing_transform_rotate_2d", "status": "UNKNOWN", "reason_code": "missing_transform" },
+    { "law_id": "U3_ambiguous_claim_uses_indexing", "status": "UNKNOWN", "reason_code": "missing_observable" },
+    { "law_id": "U4_unmet_preconditions_impossible_grid", "status": "UNKNOWN", "reason_code": "unmet_preconditions" },
+    { "law_id": "U5_resource_limit_huge_T", "status": "PASS", "note": "Will pass because max_T caps the horizon" }
+  ],
+
+  "pass_requirements": {
+    "min_cases_used": 50,
+    "require_non_vacuous": true
+  },
+
+  "fail_requirements": {
+    "require_counterexample": true,
+    "minimized_or_equal": true
+  }
+}

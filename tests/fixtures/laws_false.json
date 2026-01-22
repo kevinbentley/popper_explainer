@@ -1,0 +1,73 @@
+[
+  {
+    "schema_version": "1.0.0",
+    "law_id": "F1_collision_count_conserved",
+    "template": "invariant",
+    "quantifiers": { "T": 10 },
+    "preconditions": [
+      { "lhs": "grid_length", "op": ">=", "rhs": 4 }
+    ],
+    "observables": [
+      { "name": "collision_count", "expr": "count('X')" }
+    ],
+    "claim": "collision_count(t) == collision_count(0)",
+    "forbidden": "exists t where collision_count(t) != collision_count(0)",
+    "proposed_tests": [
+      { "family": "constrained_pair_interactions", "params": { "cases": 50, "include_collision_state": true } },
+      { "family": "adversarial_mutation_search", "params": { "budget": 500 } }
+    ],
+    "capability_requirements": { "missing_observables": [], "missing_transforms": [], "missing_generators": [] }
+  },
+  {
+    "schema_version": "1.0.0",
+    "law_id": "F2_occupied_cells_conserved",
+    "template": "invariant",
+    "quantifiers": { "T": 10 },
+    "preconditions": [
+      { "lhs": "grid_length", "op": ">=", "rhs": 4 }
+    ],
+    "observables": [
+      { "name": "occupied_cells", "expr": "count('>') + count('<') + count('X')" }
+    ],
+    "claim": "occupied_cells(t) == occupied_cells(0)",
+    "forbidden": "exists t where occupied_cells(t) != occupied_cells(0)",
+    "proposed_tests": [
+      { "family": "constrained_pair_interactions", "params": { "cases": 50, "include_collision_state": true } }
+    ],
+    "capability_requirements": { "missing_observables": [], "missing_transforms": [], "missing_generators": [] }
+  },
+  {
+    "schema_version": "1.0.0",
+    "law_id": "F3_spatial_mirror_only_is_symmetry",
+    "template": "symmetry_commutation",
+    "quantifiers": { "T": 20 },
+    "preconditions": [
+      { "lhs": "grid_length", "op": ">=", "rhs": 4 }
+    ],
+    "observables": [],
+    "transform": "mirror_only",
+    "claim": "commutes(transform='mirror_only')",
+    "forbidden": "exists t where evolve(mirror_only(S), t) != mirror_only(evolve(S, t))",
+    "proposed_tests": [
+      { "family": "symmetry_metamorphic_suite", "params": { "cases": 200, "transform": "mirror_only" } }
+    ],
+    "capability_requirements": { "missing_observables": [], "missing_transforms": [], "missing_generators": [] }
+  },
+  {
+    "schema_version": "1.0.0",
+    "law_id": "F4_swap_only_is_symmetry",
+    "template": "symmetry_commutation",
+    "quantifiers": { "T": 20 },
+    "preconditions": [
+      { "lhs": "grid_length", "op": ">=", "rhs": 4 }
+    ],
+    "observables": [],
+    "transform": "swap_only",
+    "claim": "commutes(transform='swap_only')",
+    "forbidden": "exists t where evolve(swap_only(S), t) != swap_only(evolve(S, t))",
+    "proposed_tests": [
+      { "family": "symmetry_metamorphic_suite", "params": { "cases": 200, "transform": "swap_only" } }
+    ],
+    "capability_requirements": { "missing_observables": [], "missing_transforms": [], "missing_generators": [] }
+  }
+]

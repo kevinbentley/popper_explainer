@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0.0",
+  "seed": 1337,
+  "max_runtime_ms_per_law": 2500,
+  "max_cases": 300,
+  "default_T": 50,
+  "max_T": 200,
+  "min_cases_used_for_pass": 50,
+  "enable_adversarial_search": true,
+  "adversarial_budget": 1500,
+  "enable_counterexample_minimization": true,
+  "minimization_budget": 300,
+  "store_full_trajectories": false,
+  "require_non_vacuous": true
+}

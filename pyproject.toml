@@ -1,0 +1,36 @@
+[project]
+name = "popper_explainer"
+version = "0.1.0"
+description = "Popperian explainer test suite using LLMs and simulation"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "google-generativeai>=0.5",
+    "python-dotenv>=1.0",
+    "pyparsing>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
