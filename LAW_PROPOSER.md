@@ -1,198 +1,407 @@
-Proposed law requirements:
+Below is a requirements document for the **Law Discovery** portion only (not the tester). It is written so you can hand it directly to a coding agent and start implementing. I’ve included interfaces, data types, acceptance criteria, and “non-goals” to keep it tight.
 
-Law schema requirement: quantifiers, horizon, observables, preconditions
+---
 
-A law is rejected at the front door unless it specifies:
-Template type (one of a small finite set)
-Quantifiers (forall, exists, and over what index set)
-Horizon (T, or H for eventuality)
-Preconditions (as predicates on the initial state)
-Observables (what must be measured)
-Falsifier format (what counts as a counterexample)
+# Requirements Document: Law Discovery Subsystem
 
-If it cannot fit, it is not a law yet; it is a vague hypothesis.
+## 0. Purpose
 
-Minimal template set (covers most of the KG universe)
+The Law Discovery subsystem proposes **testable, falsifiable candidate laws** about a simulated universe based on prior experiment results, while enforcing Popperian discipline:
 
-invariant: ∀t≤T: f(t) = f(0)
-implication_step: ∀t<T: P(t) → Q(t+1)
-implication_state: ∀t≤T: P(t) → Q(t)
-monotone: ∀t<T: f(t+1) ≤ f(t) or ≥
-eventually: ∀t0≤T: P(t0) → ∃t≤t0+H: Q(t)
-symmetry_commutation: evolve(Transform(S), T) = Transform(evolve(S,T))
-bound: ∀t≤T: f(t) ≤ k (or ≥)
+* Laws must be **compileable** into a constrained claim language.
+* Laws must include explicit **preconditions, quantifiers, horizons, observables, and falsifiers**.
+* The subsystem must avoid “axiom inflation” (relabeling observations as axioms).
+* The subsystem must prioritize laws that are **risky**, **novel**, and **discriminating**.
 
-Every law must include an explicit “forbidden pattern” description: a compact statement of what would refute it.
+This subsystem does **not** execute tests; it only proposes laws and ranks them. It consumes summaries produced by the tester.
 
-Example:
+---
 
-invariant law: “forbidden = any t where f(t) != f(0)”
-symmetry law: “forbidden = any state S where commutation fails at some t≤T”
-implication: “forbidden = any t where P(t) true and Q(t+1) false”
+## 1. Scope
 
-A huge source of garbage laws comes from the model inferring universality from a small number of traces.
+### In scope
 
-So enforce:
+* Structured **law proposal** generation (LLM-driven)
+* **Schema validation** and normalization
+* **Redundancy detection** (syntactic + shallow semantic)
+* **Ranking/prioritization** for testing
+* Maintaining compact, structured **working memory** for prompting
 
-Observation objects: concrete trajectories, metrics, event logs
-Law objects: quantified claims that generalize beyond observations
-Support links: a law must cite which observations motivate it, but it may not quote them as proof
+### Out of scope (explicit)
 
-This is also where you exploit long context properly: not by dumping everything, but by giving structured, queryable memory.
+* Running simulations or evaluating laws against traces
+* Generating Python test code (belongs to Tester subsystem)
+* Mechanism/axiom synthesis (separate subsystem)
+* Proof checking / theorem proving (separate subsystem)
 
-Before the LLM is allowed to output a law, it must answer (in structured form):
+---
 
-Is this law logically implied by the current accepted set?
-    If yes → do not propose (or mark as “redundant”)
+## 2. Definitions
 
-Does it distinguish between at least two competing mechanism hypotheses?
-    If no → low value
-What new experiment family would most likely falsify it?
-    If none → reject as non-Popperian
+* **Observation**: A concrete trajectory or metric series produced by the simulator for a specific initial state and configuration.
+* **Law (Claim)**: A quantified, falsifiable statement about trajectories, expressed in a constrained template language.
+* **Counterexample**: A specific experiment result that violates a law’s forbidden condition.
+* **Inconclusive / Untestable**: Not enough tester capability, not enough coverage, or ambiguous claim; law not accepted nor rejected.
 
-This makes the discovery step purposeful: each new law should force a new test.
+---
 
-Treat “untestable” as a first-class output with a reason code
+## 3. Inputs and Outputs
 
-Right now “untestable” is a bucket. Make it actionable.
-When the tester returns untestable, it must provide:
- - reason_code: one of:
- - missing_observable
- - missing_generator_knob
- - missing_transform
- - ambiguous_claim
- - requires_preimage_search
- - resource_limit (needs bigger N/T)
+### Inputs (from upstream subsystems)
 
-minimal_capability_needed: e.g. “add transform mirror+swap” or “add metric: collision_events”
-rewrite_suggestion: how to restate the law into a supported template
+1. `UniverseContract`
 
-Then the discovery LLM sees this and can:
+* Symbols, state representation, and allowed observables/transforms (capability list).
+* Any simulator configuration knobs exposed (grid length range, boundary variants, etc.) as metadata (even if not all are used yet).
 
-- propose a rewritten law (now testable), or
-- propose an instrumentation upgrade request (if you allow that)
+2. `DiscoveryMemorySnapshot`
 
-This turns “untestable” into a roadmap.
+* A compact summary of:
 
-A tighter “law discovery loop” (recommended)
-Loop state
+  * Accepted laws (top K)
+  * Falsified laws (top K) with minimal counterexamples
+  * Unknown laws (top K) with reason codes
+  * Counterexample gallery (top K)
+  * Current tester capability set (observables, transforms, generator families)
 
-Maintain three evolving sets:
+3. Optional: `Request`
 
-L_accepted (laws that survived strong tests)
+* How many laws to propose (`k`)
+* Target law families to explore (e.g., symmetry, invariant) or exclude
+* Current “open questions” (capability gaps) the system wants to prioritize
 
-L_rejected (falsified with counterexamples)
+### Outputs
 
-L_unknown (untestable or inconclusive with reason codes)
+1. `CandidateLawBatch`
 
-And a fourth:
+* List of candidate laws (validated and normalized), each with metadata:
 
-CapabilitySet (observables + transforms + generators the tester supports)
+  * novelty score, expected risk, expected discriminative value, and predicted test families
 
-Iteration steps
+2. `Rejections`
 
-Propose: discovery LLM proposes K candidate laws (compileable templates only)
+* Laws rejected due to schema violation, redundancy, or prohibited patterns (with reasons)
 
-Prioritize: rank by expected falsifiability / novelty / discrimination
+---
 
-Test: harness tests top M laws with adversarial case generation
+## 4. Core Requirements
 
-Update: store counterexamples and “why failed”
+### R1 — Constrained Claim Language (Templates)
 
-Reflect: discovery LLM gets only summaries plus key counterexample traces, not the entire history
+All proposed laws MUST be expressible in one of the following templates:
 
-Then occasionally:
-6) Mechanism synthesis: separate step tries to compress accepted laws into small mechanism axioms (local rules), and predicts new laws to test.
+1. `invariant`
 
-This avoids your previous “generate axioms → then theorems → then predictions” being too detached from falsification.
+* Form: `∀t∈[0..T]: f(state[t]) == f(state[0])`
 
-Instead: falsification continuously drives mechanism learning.
+2. `monotone`
 
-Bigger context helps only if it is structured and salient.
+* Form: `∀t∈[0..T-1]: f(t+1) <= f(t)` (or >=)
 
-Do NOT
+3. `implication_step`
 
-Dump every experiment trace raw
+* Form: `∀t∈[0..T-1]: P(state[t]) → Q(state[t+1])`
 
-Provide 1000 laws as plain text
+4. `implication_state`
 
-Give the model a wall of logs and hope it “figures it out”
+* Form: `∀t∈[0..T]: P(state[t]) → Q(state[t])`
 
-DO
+5. `eventually`
 
-Provide:
+* Form: `∀t0∈[0..T]: P(state[t0]) → ∃t∈[t0..min(t0+H,T)]: Q(state[t])`
 
-A compact universe spec (symbols, step API, what’s observable)
+6. `symmetry_commutation`
 
-A rolling “frontier summary”:
+* Form: `evolve(Transform(S), T) == Transform(evolve(S, T))`
 
-top accepted laws (maybe 20–40), each in strict schema
+7. `bound`
 
-top falsified laws + minimal counterexample
+* Form: `∀t∈[0..T]: f(t) <= k` (or >=)
 
-top unknown laws + reason_code
+If the LLM outputs a law not matching these, it is **rejected** (not “untestable”).
 
-A small “counterexample gallery”:
+---
 
-10–30 canonical traces that killed big classes of claims
+### R2 — Law Object Must Include Falsifier
 
-A “redundancy map”:
+Every proposed law must include:
 
-derived/duplicate law patterns you do not want again
+* `forbidden`: a machine-checkable description of what constitutes a counterexample.
 
-This gives the model the benefit of long context (it learns what not to repeat, and what failure looks like), without drowning it.
+Examples:
 
-Bonus: retrieval inside your own system
+* `invariant`: “exists t where f(t) != f(0)”
+* `implication_step`: “exists t where P(t) true and Q(t+1) false”
+* `symmetry_commutation`: “exists t where state_A[t] != transform(state_B[t])”
 
-Instead of putting everything into the prompt, store all laws/traces in a local DB and provide the LLM:
+No law may be accepted into the candidate batch without a falsifier definition.
 
-the short summary
+---
 
-plus on-demand retrieval (give it an API tool call in your agent framework)
+### R3 — Preconditions are Mandatory
 
-That’s “long context,” but controllable.
+Every law must specify applicability conditions as structured predicates over the **initial state and configuration**.
 
-```
+Examples:
+
+* `grid_length >= 5`
+* `count('>') >= 1`
+* `boundary_type == periodic` (only if boundary variants exist in UniverseContract)
+* `collision_count(0) > 0`
+
+If no preconditions are needed, the law must explicitly declare `preconditions: []`.
+
+---
+
+### R4 — Observables Must Be Declared and Must Be Available
+
+Each law must explicitly list:
+
+* `observables`: named metrics used by `f`, `P`, `Q`, or `Transform`.
+
+Each observable must map to one of:
+
+* A primitive observable in `UniverseContract` (e.g., `count(symbol)`)
+* A derived observable defined in the law object via a restricted expression language.
+
+If an observable cannot be resolved using current capabilities, the law is still allowed (it may become “unknown”), but it must be labeled:
+
+* `capability_requirements`: what is missing (observable/transform/generator)
+
+This enables the tester to return actionable “unknown reason codes.”
+
+---
+
+### R5 — No Axioms During Law Discovery
+
+The LLM is forbidden from proposing:
+
+* “axioms”
+* “mechanisms”
+* “definitions of the universe”
+* “update rules”
+
+It may only propose **claims** as above.
+
+(Those belong to a separate Mechanism Synthesis subsystem.)
+
+---
+
+### R6 — Redundancy and Triviality Filters
+
+The subsystem must reject or downrank laws that are:
+
+* Duplicate of an already-known accepted/falsified law (syntactic match or normalized match)
+* Trivial identities (e.g., “occupied = R + L + X” if “occupied” is defined that way)
+* Pure rephrasings (e.g., conservation and “non-decreasing” that is implied by conservation)
+
+Minimum implementation:
+
+* Normalize template + observables + preconditions
+* Hash normalized form
+* Reject exact duplicates
+* Downrank near-duplicates via similarity heuristic (see R10)
+
+---
+
+### R7 — Novelty / Discrimination Requirement
+
+Each law must include at least one of:
+
+* `distinguishes_from`: references to one or more plausible rival hypotheses OR
+* `novelty_claim`: why it is not implied by accepted laws
+
+If neither is provided, the law is allowed but receives a **low ranking** by default.
+
+---
+
+### R8 — Proposed Test Families
+
+Each law must propose at least one test family in structured form, from a known list of generator families (declared by tester capability set), e.g.:
+
+* `random_density_sweep`
+* `constrained_pair_interactions`
+* `edge_wrapping_cases`
+* `symmetry_metamorphic_suite`
+* `adversarial_mutation_search`
+
+If the system proposes a test family not currently supported, it must declare it as a capability requirement.
+
+---
+
+### R9 — Deterministic Prompt Construction
+
+Prompting must be constructed deterministically from inputs:
+
+* stable ordering
+* fixed formatting
+* explicit token budgeting
+
+Rationale: makes behavior reproducible for debugging and ablation.
+
+---
+
+### R10 — Ranking Model
+
+The subsystem must produce a ranked list of candidate laws using a deterministic scoring function:
+
+`score = w1*risk + w2*novelty + w3*discrimination + w4*testability - w5*redundancy`
+
+Where:
+
+* `risk`: how easily falsifiable it is (strong prohibitions, broad preconditions)
+* `novelty`: distance from known laws
+* `discrimination`: likelihood to separate rival mechanisms
+* `testability`: based on current tester capabilities
+* `redundancy`: similarity to existing items
+
+Initial implementation may be heuristic (no ML required).
+
+---
+
+## 5. Data Types
+
+### 5.1 UniverseContract (input)
+
+```json
 {
-  "law_id": "right_component_conservation",
-  "template": "invariant",
-  "scope": {
-    "quantifier": "forall",
-    "time_horizon": 100
+  "symbols": [".", ">", "<", "X"],
+  "state_representation": "string|array",
+  "capabilities": {
+    "primitive_observables": ["count(symbol)", "grid_length", "cell_at(i)"],
+    "derived_observables_allowed": true,
+    "transforms": ["mirror_swap", "shift_k", "swap_only", "mirror_only"],
+    "generator_families": ["random_density_sweep", "constrained_pair_interactions", "symmetry_metamorphic_suite"]
   },
-  "preconditions": [
-    {"pred": "grid_length", "op": ">=", "value": 5}
-  ],
-  "observables": [
-    {"name": "R_total", "definition": "count('>') + count('X')"}
-  ],
-  "claim": "R_total(t) == R_total(0) for all t in [0..T]",
-  "forbidden": "exists t in [0..T] where R_total(t) != R_total(0)",
-  "discriminates": [
-    {"against": "particle_count_conservation_only", "why": "component vs particle bookkeeping"}
-  ],
-  "proposed_tests": [
-    {
-      "family": "random_density_sweep",
-      "params": {"densities": [0.1,0.3,0.6], "cases": 200}
-    },
-    {
-      "family": "adversarial_mutation",
-      "params": {"budget": 2000, "mutation_ops": ["swap_cells","flip_symbol","shift"]}
-    }
-  ]
+  "config_knobs": {
+    "grid_length_range": [4, 200]
+  }
 }
 ```
 
-extra constraints that will improve quality immediately
-Constraint A: ban “axioms” during law discovery
+### 5.2 CandidateLaw (output)
 
-During discovery, the model may only output “claims.” No axioms, no theories.
+```json
+{
+  "law_id": "string",
+  "template": "invariant|monotone|implication_step|implication_state|eventually|symmetry_commutation|bound",
+  "quantifiers": {
+    "type": "forall|exists|mixed",
+    "T": 50,
+    "H": 10
+  },
+  "preconditions": [
+    {"lhs": "grid_length", "op": ">=", "rhs": 5}
+  ],
+  "observables": [
+    {"name": "R_total", "expr": "count('>') + count('X')"}
+  ],
+  "claim": "string (restricted expression form)",
+  "forbidden": "string (restricted expression form)",
+  "distinguishes_from": ["optional ids or descriptions"],
+  "proposed_tests": [
+    {"family": "random_density_sweep", "params": {"cases": 200, "densities": [0.1,0.3,0.6]}}
+  ],
+  "capability_requirements": {
+    "missing_observables": [],
+    "missing_transforms": [],
+    "missing_generators": []
+  },
+  "ranking_features": {
+    "risk": 0.0,
+    "novelty": 0.0,
+    "discrimination": 0.0,
+    "testability": 0.0,
+    "redundancy": 0.0
+  }
+}
+```
 
-Later, mechanism synthesis tries to explain accepted claims via small axioms.
+### 5.3 DiscoveryMemorySnapshot (input)
 
-Constraint B: require each new law to come with a likely counterexample strategy
+Provide as structured lists of laws and counterexamples, not raw logs.
 
-Even if the law is true, the model must say how it would try to break it.
-This is Popper pressure in prompt form.
+---
 
+## 6. Prompting Requirements (LLM)
+
+### P1 — Strict output format
+
+The LLM must output:
+
+* JSON array of CandidateLaw objects ONLY
+* No prose
+* No markdown
+
+### P2 — Include “Do not propose axioms” rule
+
+Prompt must explicitly ban:
+
+* axioms
+* rules of evolution
+* redefining metrics
+* restating accepted laws
+
+### P3 — Context packaging
+
+Prompt must include:
+
+* UniverseContract capability summary
+* Accepted laws (top K, normalized)
+* Falsified laws with minimal counterexamples
+* Unknown laws with reason codes
+* Counterexample gallery (small)
+
+K must be configurable; default K=30 accepted, 20 falsified, 20 unknown, 20 counterexamples.
+
+---
+
+## 7. Acceptance Criteria
+
+Law Discovery subsystem is considered correct when:
+
+1. **100%** of proposed laws validate against schema and compile into one of the templates (or are rejected with a reason).
+2. Duplicate proposals across iterations drop significantly (redundancy filter works).
+3. “Untestable” is reduced by:
+
+   * rejecting non-compileable laws early, and
+   * surfacing capability requirements for the rest.
+4. Proposed laws increasingly target:
+
+   * symmetry commutation tests
+   * invariants involving derived observables
+   * implication-based event laws
+5. The top-ranked laws are measurably more “killable” (higher falsification rate) than random proposals (requires tester metrics; but discovery must output ranking features).
+
+---
+
+## 8. Logging and Audit
+
+The subsystem must log per iteration:
+
+* Prompt hash + prompt size
+* Candidate batch before/after normalization
+* Rejection reasons distribution
+* Ranking scores and final order
+* Redundancy matches (what it was similar to)
+
+Logs must be sufficient to reconstruct why a law was proposed and why it was prioritized.
+
+---
+
+## 9. Non-Functional Requirements
+
+* Deterministic behavior aside from LLM sampling (seedable)
+* Configurable token budgets and K values
+* Safe JSON parsing and strict validation
+* Backwards-compatible schema evolution (version field recommended)
+
+---
+
+## 10. Implementation Notes (recommended, not required)
+
+* Implement a `ClaimCompiler` that converts `template + observables + claim/forbidden` into an internal AST used by the tester later.
+* Implement normalization rules (commutative reordering, canonical precondition ordering, whitespace stripping).
+* Keep a law fingerprint index for fast duplicate detection.
+
+---
