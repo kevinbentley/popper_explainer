@@ -2,6 +2,21 @@
 
 Observables are functions that extract numeric values from states.
 These are the building blocks for law claims.
+
+HARNESS SEMANTICS - CRITICAL INVARIANTS:
+========================================
+1. incoming_collisions MUST match the simulator's collision condition:
+   - Cell j has incoming collision iff:
+     state[(j-1) % L] in {'>', 'X'} AND state[(j+1) % L] in {'<', 'X'}
+   - This is because BOTH '>' AND 'X' emit right-movers (to their right)
+   - And BOTH '<' AND 'X' emit left-movers (to their left)
+   - The bridge law CollisionCells(t+1) == IncomingCollisions(t) MUST hold
+
+2. Observable definitions must be consistent with simulator.py:
+   - '>' moves right: dest = (i + 1) % L
+   - '<' moves left: dest = (i - 1) % L
+   - 'X' emits both: right to (i+1)%L, left to (i-1)%L
+   - Collision forms when both a right-mover AND left-mover arrive at same cell
 """
 
 from src.universe.types import State, Symbol, VALID_SYMBOLS
@@ -197,6 +212,87 @@ def adjacent_pairs(state: State, sym1: str, sym2: str) -> int:
     return count
 
 
+def gap_pairs(state: State, sym1: str, sym2: str, gap: int) -> int:
+    """Count pairs of symbols with exactly `gap` cells between them.
+
+    This is essential for detecting converging particles:
+    - gap_pairs('>', '<', 1) counts '>.<' patterns (will collide in 1 step)
+    - gap_pairs('>', '<', 0) is equivalent to adjacent_pairs('>', '<')
+
+    NOTE: This does NOT account for wrap-around. For collision detection
+    with periodic boundaries, use incoming_collisions() instead.
+
+    Args:
+        state: State string
+        sym1: First symbol
+        sym2: Second symbol
+        gap: Number of cells between sym1 and sym2 (distance = gap + 1)
+
+    Returns:
+        Count of pairs at the specified distance
+
+    Raises:
+        ValueError: If symbols are invalid or gap is negative
+    """
+    if sym1 not in VALID_SYMBOLS or sym2 not in VALID_SYMBOLS:
+        raise ValueError(f"Invalid symbols")
+    if gap < 0:
+        raise ValueError(f"Gap must be non-negative, got {gap}")
+
+    distance = gap + 1  # gap=0 means adjacent (distance 1)
+    count = 0
+    for i in range(len(state) - distance):
+        if state[i] == sym1 and state[i + distance] == sym2:
+            count += 1
+    return count
+
+
+def incoming_collisions(state: State) -> int:
+    """Count cells that will have a collision at the next timestep.
+
+    This is THE canonical observable for collision prediction. A cell j
+    has an incoming collision if both:
+    - state[(j-1) % L] in {'>', 'X'} (right-mover heading into j)
+    - state[(j+1) % L] in {'<', 'X'} (left-mover heading into j)
+
+    Note: X contributes BOTH a right-mover (to its right) AND a left-mover
+    (to its left) when it resolves. So X acts as a source for both directions.
+
+    This properly handles wrap-around with periodic boundaries.
+
+    Key laws using this observable:
+    - Bridge: CollisionCells(t+1) == IncomingCollisions(t)
+    - Conservation: (IncomingCollisions(t)==0 AND CollisionCells(t)==0)
+                    => FreeMovers(t+1) == FreeMovers(t)
+    - Exchange: FreeMovers(t+1) - FreeMovers(t) == 2*(CollisionCells(t) - IncomingCollisions(t))
+
+    Args:
+        state: State string
+
+    Returns:
+        Count of cells that will become X at t+1
+    """
+    L = len(state)
+    if L == 0:
+        return 0
+
+    # Sources of right-movers: > and X (both send right-mover to their right)
+    # Sources of left-movers: < and X (both send left-mover to their left)
+    RIGHT_SOURCES = {'>', 'X'}
+    LEFT_SOURCES = {'<', 'X'}
+
+    count = 0
+    for j in range(L):
+        left_neighbor = (j - 1) % L
+        right_neighbor = (j + 1) % L
+        # Cell j has incoming collision if right-mover from left AND left-mover from right
+        has_right_mover = state[left_neighbor] in RIGHT_SOURCES
+        has_left_mover = state[right_neighbor] in LEFT_SOURCES
+        if has_right_mover and has_left_mover:
+            count += 1
+    return count
+
+
 def spread(state: State, symbol: str) -> int:
     """Measure the spread of a symbol: rightmost - leftmost position.
 
@@ -224,6 +320,8 @@ PRIMITIVE_OBSERVABLES: dict[str, str] = {
     "rightmost": "rightmost(symbol) - position of last occurrence (-1 if none)",
     "max_gap": "max_gap(symbol) - longest contiguous run of symbol",
     "adjacent_pairs": "adjacent_pairs(sym1, sym2) - count of sym1 followed by sym2",
+    "gap_pairs": "gap_pairs(sym1, sym2, gap) - count of sym1 followed by sym2 with gap cells between",
+    "incoming_collisions": "incoming_collisions - count of cells that will have collision at t+1",
     "spread": "spread(symbol) - rightmost - leftmost position",
 }
 
@@ -384,7 +482,57 @@ CANONICAL_OBSERVABLES: dict[str, CanonicalObservable] = {
         quantity_type="component_count",
         notes="Conserved only if no collisions occur",
     ),
+
+    # === COLLISION PREDICTION OBSERVABLES ===
+    "IncomingCollisions": CanonicalObservable(
+        name="IncomingCollisions",
+        expression="incoming_collisions",
+        description="Count of cells that will have collision at t+1",
+        conservation=ConservationStatus.NOT_CONSERVED,
+        quantity_type="collision_count",
+        notes="THE canonical collision predictor. Cell j collides if "
+              "state[(j-1)%L] in {>,X} AND state[(j+1)%L] in {<,X}. "
+              "X contributes both a right-mover and left-mover when resolving.",
+    ),
+    "AdjacentRL": CanonicalObservable(
+        name="AdjacentRL",
+        expression="adjacent_pairs('>', '<')",
+        description="Count of >< patterns",
+        conservation=ConservationStatus.NOT_CONSERVED,
+        quantity_type="pair_count",
+        notes="Counts adjacent >< pairs. Note: >< does NOT cause collision "
+              "(particles pass through). Use IncomingCollisions for collision prediction.",
+    ),
 }
+
+
+# =============================================================================
+# CANONICAL LAWS (derived from dynamics)
+# =============================================================================
+# These are the key laws that should be verified by the harness.
+# They follow directly from the simulator's update rules.
+#
+# BRIDGE LAW (collision prediction):
+#   CollisionCells(t+1) == IncomingCollisions(t)
+#
+# CONSERVATION (no activity):
+#   (IncomingCollisions(t) == 0 AND CollisionCells(t) == 0)
+#     => FreeMovers(t+1) == FreeMovers(t)
+#   (IncomingCollisions(t) == 0 AND CollisionCells(t) == 0)
+#     => RightMovers(t+1) == RightMovers(t)
+#   (IncomingCollisions(t) == 0 AND CollisionCells(t) == 0)
+#     => LeftMovers(t+1) == LeftMovers(t)
+#
+# EXCHANGE RATE LAW (always true):
+#   FreeMovers(t+1) - FreeMovers(t) == 2*(CollisionCells(t) - IncomingCollisions(t))
+#
+# INVARIANTS (always true):
+#   TotalParticles(t) == TotalParticles(0)           # conservation
+#   RightComponent(t) == RightComponent(0)           # conservation
+#   LeftComponent(t) == LeftComponent(0)             # conservation
+#   Momentum(t) == Momentum(0)                       # conservation
+#   TotalParticles(t) == FreeMovers(t) + 2*CollisionCells(t)  # identity
+# =============================================================================
 
 
 # Mapping from common "Movers" expressions to canonical names

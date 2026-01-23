@@ -49,6 +49,7 @@ Each character represents one cell and must be exactly one of:
 Example state:
 ..><.X..
 
+**X is not permitted in initial states**
 
 ---
 
@@ -86,39 +87,48 @@ Time advances in discrete steps: `t → t+1`.
 
 Evolution is **deterministic** and proceeds as follows:
 
-### 4.1 Movement Phase
+### 4.1 Movement and Contribution Phase (Simultaneous)
 
-Each particle attempts to move simultaneously:
+Time advances in discrete steps. Each cell contributes particles to neighboring cells simultaneously, according to its contents:
 
-- `>` moves one cell to the right
-- `<` moves one cell to the left
-- movement wraps around at boundaries (periodic)
+- > at position i contributes one right-moving particle to cell (i + 1) mod L
+- < at position i contributes one left-moving particle to cell (i − 1) mod L
+- X at position i contributes:
+  - one right-moving particle to (i + 1) mod L
+  - one left-moving particle to (i − 1) mod L
+- . contributes nothing
 
-### 4.2 Collision Formation
+All contributions are computed from the state at time t before any resolution occurs.
+The grid has periodic boundary conditions.
 
-If a `>` and `<` attempt to occupy the same cell in the same time step:
-- they form an `X` at that cell
-- no other collision types exist
-- collisions only occur between opposite-direction particles
+### 4.2 Destination Resolution (Collision Formation)
 
-### 4.3 Collision Resolution
+After all contributions are collected, each cell independently resolves its incoming particles:
 
-Every `X` resolves **in the next time step**:
+Let a cell receive:
+- r right-moving particles
+- l left-moving particles
 
-- the `>` exits to the right
-- the `<` exits to the left
-- the original cell becomes empty (`.`)
+The resulting cell state at time t + 1 is:
 
-Resulting pattern (schematic):
-X → <.>
+- X if r > 0 and l > 0
+- > if r > 0 and l = 0
+- < if l > 0 and r = 0
+- . if r = 0 and l = 0
 
-Resolution is:
-- mandatory
-- deterministic
-- completes in exactly one step
-- never produces another `X`
+Thus, collisions are defined by opposing incoming particle flows, not by static adjacency alone.
 
----
+### 4.3 Properties of X (Collision Cells)
+
+- X represents a collision between opposing particles
+- X exists for exactly one time step
+- An X cell does not persist unless new opposing contributions arrive
+- An X cell at time t contributes particles during the next movement phase as defined above
+- New X cells may form at time t + 1 due to:
+  - approaching free particles, or
+  - interception of particles emitted by resolving X cells
+
+There is no guarantee that resolving a collision prevents new collisions from forming in subsequent steps.
 
 ## 5. Boundary Conditions
 

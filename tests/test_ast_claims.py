@@ -311,7 +311,7 @@ class TestASTCheckInvariant:
 
         # Trajectory where particle count is conserved (1 right, 1 left -> collision -> separate)
         trajectory = [">.<.", ".X..", "<.>."]  # N = 2 throughout
-        passed, t_fail, details = evaluator.check_invariant(trajectory)
+        passed, t_fail, details, _ = evaluator.check_invariant(trajectory)
         assert passed
         assert t_fail is None
 
@@ -322,13 +322,13 @@ class TestASTCheckInvariant:
 
         # Trajectory where right-movers change (collision absorbs them)
         trajectory = [".>.", "..>", ">.."]
-        passed, t_fail, details = evaluator.check_invariant(trajectory)
+        passed, t_fail, details, _ = evaluator.check_invariant(trajectory)
         # Actually this should pass since count('>') = 1 throughout
         assert passed
 
         # Now one that actually violates
         trajectory2 = [".>.", ".X.", ".<."]  # > -> X -> <
-        passed2, t_fail2, details2 = evaluator.check_invariant(trajectory2)
+        passed2, t_fail2, details2, _ = evaluator.check_invariant(trajectory2)
         assert not passed2
         assert t_fail2 == 1  # Violation at t=1 where X appears
 
@@ -338,7 +338,7 @@ class TestASTCheckInvariant:
         evaluator = ASTClaimEvaluator(law)
 
         trajectory = [">.<.", ".X..", "<.>."]  # P = 0 throughout
-        passed, t_fail, details = evaluator.check_invariant(trajectory)
+        passed, t_fail, details, _ = evaluator.check_invariant(trajectory)
         assert passed
 
 
@@ -368,7 +368,7 @@ class TestASTCheckImplication:
 
         # Collision resolves in one step
         trajectory = [".>.<.", "..X..", ".<.>.", ".<..>"]
-        passed, t_fail, details = evaluator.check_implication_step(trajectory)
+        passed, t_fail, details, _ = evaluator.check_implication_step(trajectory)
         assert passed
 
     def test_implication_vacuously_true(self):
@@ -378,7 +378,7 @@ class TestASTCheckImplication:
 
         # No collisions ever
         trajectory = [".>..", "..>.", "...>", ">..."]
-        passed, t_fail, details = evaluator.check_implication_step(trajectory)
+        passed, t_fail, details, _ = evaluator.check_implication_step(trajectory)
         assert passed  # Vacuously true
 
     def test_implication_violation(self):
@@ -388,7 +388,7 @@ class TestASTCheckImplication:
 
         # Collision persists (hypothetically)
         trajectory = [".X..", ".X..", ".<>."]
-        passed, t_fail, details = evaluator.check_implication_step(trajectory)
+        passed, t_fail, details, _ = evaluator.check_implication_step(trajectory)
         assert not passed
         assert t_fail == 0
 
@@ -419,7 +419,7 @@ class TestASTCheckMonotone:
 
         # X count decreases or stays same
         trajectory = [".XX.", ".X..", "....", "...."]
-        passed, t_fail, details = evaluator.check_monotone(trajectory)
+        passed, t_fail, details, _ = evaluator.check_monotone(trajectory)
         assert passed
 
     def test_monotone_violation(self):
@@ -430,7 +430,7 @@ class TestASTCheckMonotone:
         # X count increases: t=0 has 0 X's, t=1 has 1 X
         # Comparing X(t+1) <= X(t) at t=0: X(1)=1 <= X(0)=0 is False
         trajectory = ["....", ".X..", ".XX."]
-        passed, t_fail, details = evaluator.check_monotone(trajectory)
+        passed, t_fail, details, _ = evaluator.check_monotone(trajectory)
         assert not passed
         assert t_fail == 0  # First violation at t=0 (X(1) > X(0))
 

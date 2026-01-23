@@ -24,9 +24,10 @@ from src.harness.generators import GeneratorRegistry
 from src.harness.minimizer import Minimizer
 from src.harness.power import PowerMetrics
 from src.claims.vacuity import VacuityReport
-from src.harness.verdict import Counterexample, LawVerdict, ReasonCode
+from src.harness.verdict import Counterexample, FailureType, LawVerdict, ReasonCode
 from src.universe.simulator import version_hash as sim_version_hash
 from src.universe.transforms import list_transforms
+from src.universe.validation import is_valid_initial_state
 
 
 class Harness:
@@ -90,10 +91,22 @@ class Harness:
         results: list[CaseResult] = []
         counterexample: Counterexample | None = None
         power_metrics = PowerMetrics()
+        invalid_initial_states = 0  # Track generator bugs
+        invalid_by_generator: dict[str, int] = {}  # Track per-generator validity
 
         for case in cases:
             if len(results) >= self.config.max_cases:
                 break
+
+            # Preflight validation: check initial state is valid per universe contract
+            # X cells can only arise from collision, not exist at t=0
+            if not is_valid_initial_state(case.initial_state, case.config):
+                invalid_initial_states += 1
+                invalid_by_generator[case.generator_family] = (
+                    invalid_by_generator.get(case.generator_family, 0) + 1
+                )
+                # Skip invalid states - they indicate a generator bug, not a law failure
+                continue
 
             result = self._evaluator.evaluate_case(case, time_horizon)
             results.append(result)
@@ -146,6 +159,17 @@ class Harness:
         verdict = self._determine_verdict(
             law, results, counterexample, power_metrics, runtime_ms
         )
+
+        # Track invalid initial states (generator bugs)
+        if invalid_initial_states > 0:
+            verdict.notes = verdict.notes or []
+            verdict.notes.append(
+                f"Skipped {invalid_initial_states} invalid initial state(s) "
+                f"(contained X at t=0, violates universe contract)"
+            )
+            # Per-generator breakdown for debugging
+            for gen, count in sorted(invalid_by_generator.items()):
+                verdict.notes.append(f"  - {gen}: {count} invalid")
 
         # Minimize counterexample if found
         if verdict.status == "FAIL" and counterexample and self.config.enable_counterexample_minimization:
@@ -358,6 +382,7 @@ class Harness:
             return LawVerdict(
                 law_id=law.law_id,
                 status="FAIL",
+                failure_type=FailureType.LAW_COUNTEREXAMPLE,
                 counterexample=counterexample,
                 power_metrics=power_metrics,
                 vacuity=vacuity,
@@ -420,6 +445,24 @@ class Harness:
                         f"Insufficient antecedent coverage: {vacuity.antecedent_true_count} triggers "
                         f"(need {self.config.min_antecedent_triggers})",
                         "Consider adding targeted test cases that satisfy the antecedent",
+                    ],
+                )
+
+            # Check trigger diversity - antecedent should trigger across multiple generators
+            if vacuity.trigger_diversity < self.config.min_trigger_diversity:
+                return LawVerdict(
+                    law_id=law.law_id,
+                    status="UNKNOWN",
+                    reason_code=ReasonCode.INCONCLUSIVE_LOW_POWER,
+                    power_metrics=power_metrics,
+                    vacuity=vacuity,
+                    runtime_ms=runtime_ms,
+                    tests_run=tests_run,
+                    notes=[
+                        f"Low trigger diversity: antecedent only triggered from {vacuity.trigger_diversity} "
+                        f"generator families (need {self.config.min_trigger_diversity})",
+                        f"Triggering generators: {list(vacuity.triggering_generators)}",
+                        f"Distinct triggering states: {len(vacuity.triggering_states)}",
                     ],
                 )
 

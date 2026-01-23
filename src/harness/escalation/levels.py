@@ -61,6 +61,8 @@ _ESCALATION_3_WEIGHTS = {
 }
 
 
+# Note: escalation presets use 4 generators, so max diversity is 4
+# We use progressive diversity: 2 → 2 → 3 → 3 (capped at realistic levels)
 _PRESETS: dict[EscalationLevel, EscalationPreset] = {
     EscalationLevel.BASELINE: EscalationPreset(
         level=EscalationLevel.BASELINE,
@@ -76,6 +78,8 @@ _PRESETS: dict[EscalationLevel, EscalationPreset] = {
             enable_counterexample_minimization=True,
             minimization_budget=300,
             require_non_vacuous=True,
+            min_antecedent_triggers=20,
+            min_trigger_diversity=2,
             generator_weights=_BASELINE_WEIGHTS,
         ),
         description="Fast/cheap baseline testing (default discovery config)",
@@ -95,6 +99,8 @@ _PRESETS: dict[EscalationLevel, EscalationPreset] = {
             enable_counterexample_minimization=True,
             minimization_budget=400,
             require_non_vacuous=True,
+            min_antecedent_triggers=40,
+            min_trigger_diversity=2,
             generator_weights=_BASELINE_WEIGHTS,
         ),
         description="2x cases, 1.5x horizon, stronger pass threshold",
@@ -114,6 +120,8 @@ _PRESETS: dict[EscalationLevel, EscalationPreset] = {
             enable_counterexample_minimization=True,
             minimization_budget=500,
             require_non_vacuous=True,
+            min_antecedent_triggers=60,
+            min_trigger_diversity=3,
             generator_weights=_ESCALATION_2_WEIGHTS,
         ),
         description="3x cases, 2x horizon, emphasis on symmetry tests",
@@ -133,6 +141,8 @@ _PRESETS: dict[EscalationLevel, EscalationPreset] = {
             enable_counterexample_minimization=True,
             minimization_budget=600,
             require_non_vacuous=True,
+            min_antecedent_triggers=100,
+            min_trigger_diversity=3,
             generator_weights=_ESCALATION_3_WEIGHTS,
         ),
         description="Maximal testing: 5x cases, 3x horizon, heavy adversarial",

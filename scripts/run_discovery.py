@@ -92,6 +92,70 @@ class LLMExchangeLogger:
         return filepath
 
 
+class CounterexampleLogger:
+    """Logs falsifying counterexamples to a file.
+
+    Thread-safe: uses file locking to support multiple workers writing
+    to the same log file.
+    """
+
+    def __init__(self, log_path: Path):
+        self.log_path = log_path
+        self._lock = threading.Lock()
+        # Write header
+        with open(self.log_path, "w") as f:
+            f.write("# Counterexample Log\n")
+            f.write(f"# Started: {datetime.now().isoformat()}\n")
+            f.write("# Format: JSON lines (one counterexample per line)\n\n")
+
+    def log_counterexample(
+        self,
+        law_id: str,
+        law_claim: str,
+        template: str,
+        counterexample: "Counterexample",
+        failure_type: str | None = None,
+        worker_id: int | None = None,
+        iteration: int | None = None,
+    ) -> None:
+        """Log a falsifying counterexample.
+
+        Args:
+            law_id: ID of the falsified law
+            law_claim: The claim that was falsified
+            template: The law's template type
+            counterexample: The counterexample that falsified the law
+            failure_type: Classification (law_counterexample, invalid_initial_state, etc.)
+            worker_id: Worker ID for parallel mode
+            iteration: Discovery iteration number
+        """
+        from src.harness.verdict import Counterexample
+
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "failure_type": failure_type or "law_counterexample",
+            "law_id": law_id,
+            "law_claim": law_claim,
+            "template": template,
+            "initial_state": counterexample.initial_state,
+            "grid_length": len(counterexample.initial_state),
+            "t_fail": counterexample.t_fail,
+            "t_max": counterexample.t_max,
+            "trajectory_excerpt": counterexample.trajectory_excerpt,
+            "observables_at_fail": counterexample.observables_at_fail,
+            "violation_details": counterexample.witness,
+            "minimized": counterexample.minimized,
+        }
+        if worker_id is not None:
+            entry["worker_id"] = worker_id
+        if iteration is not None:
+            entry["iteration"] = iteration
+
+        with self._lock:
+            with open(self.log_path, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+
+
 class TranscriptLogger:
     """Logs all output to both console and transcript file. Thread-safe."""
 
@@ -400,6 +464,7 @@ def discovery_worker(
     enable_escalation: bool = True,
     escalation_config: EscalationPolicyConfig | None = None,
     exchange_logger: LLMExchangeLogger | None = None,
+    counterexample_logger: CounterexampleLogger | None = None,
 ) -> None:
     """Run discovery cycles in a worker thread.
 
@@ -548,6 +613,17 @@ def discovery_worker(
                             logger.log(f"    Save error: {e}", worker_id=worker_id)
                     elif verdict.status == "FAIL":
                         cycle_falsified += 1
+                        # Log counterexample
+                        if counterexample_logger and verdict.counterexample:
+                            counterexample_logger.log_counterexample(
+                                law_id=law.law_id,
+                                law_claim=law.claim,
+                                template=law.template.value,
+                                counterexample=verdict.counterexample,
+                                failure_type=verdict.failure_type.value if verdict.failure_type else None,
+                                worker_id=worker_id,
+                                iteration=iteration,
+                            )
                         try:
                             persistence.save_falsified(law, verdict)
                         except Exception as e:
@@ -663,6 +739,10 @@ def run_discovery_parallel(
         exchanges_dir = output_dir / f"llm_exchanges_{timestamp}"
         exchange_logger = LLMExchangeLogger(exchanges_dir)
 
+    # Create counterexample logger (always active)
+    counterexample_log_path = output_dir / f"counterexamples_{timestamp}.jsonl"
+    counterexample_logger = CounterexampleLogger(counterexample_log_path)
+
     with TranscriptLogger(transcript_path) as logger:
         logger.log("=" * 60)
         logger.log("PARALLEL POPPERIAN LAW DISCOVERY")
@@ -675,6 +755,7 @@ def run_discovery_parallel(
         logger.log(f"Verbose: {verbose}")
         if verbose:
             logger.log(f"  LLM exchanges dir: {exchanges_dir}")
+        logger.log(f"Counterexamples log: {counterexample_log_path}")
         logger.log(f"Escalation: {'enabled' if enable_escalation else 'disabled'}")
         if enable_escalation:
             logger.log(f"  Trigger: {escalation_config.min_accepted_laws} laws")
@@ -706,6 +787,7 @@ def run_discovery_parallel(
                     enable_escalation=enable_escalation,
                     escalation_config=escalation_config,
                     exchange_logger=exchange_logger,
+                    counterexample_logger=counterexample_logger,
                 )
                 for i in range(workers)
             ]
@@ -846,13 +928,18 @@ def run_discovery(
         exchanges_dir = output_dir / f"llm_exchanges_{timestamp}"
         exchange_logger = LLMExchangeLogger(exchanges_dir)
 
+    # Create counterexample logger (always active)
+    counterexample_log_path = output_dir / f"counterexamples_{timestamp}.jsonl"
+    counterexample_logger = CounterexampleLogger(counterexample_log_path)
+
     with TranscriptLogger(transcript_path) as logger:
         with UntestableLawsLog(untestable_path) as untestable_log:
             with DiscoveryPersistence(db_path) as persistence:
                 return _run_discovery_with_logging(
                     iterations, laws_per_iteration, output_dir, timestamp,
                     logger, verbose, untestable_log, persistence,
-                    enable_escalation, escalation_config, exchange_logger
+                    enable_escalation, escalation_config, exchange_logger,
+                    counterexample_logger
                 )
 
 
@@ -868,6 +955,7 @@ def _run_discovery_with_logging(
     enable_escalation: bool = True,
     escalation_config: EscalationPolicyConfig | None = None,
     exchange_logger: LLMExchangeLogger | None = None,
+    counterexample_logger: CounterexampleLogger | None = None,
 ) -> dict:
     """Run discovery with transcript logging."""
     # Initialize escalation config early so we can log its values
@@ -883,6 +971,8 @@ def _run_discovery_with_logging(
     logger.log(f"Verbose: {verbose}")
     if verbose and exchange_logger:
         logger.log(f"  LLM exchanges dir: {exchange_logger.exchanges_dir}")
+    if counterexample_logger:
+        logger.log(f"Counterexamples log: {counterexample_logger.log_path}")
     if persistence:
         logger.log(f"Database: {persistence.db_path}")
     logger.log(f"Escalation: {'enabled' if enable_escalation else 'disabled'}")
@@ -1139,6 +1229,16 @@ def _run_discovery_with_logging(
                         logger.log(f"      Warning: Could not save to database: {e}")
             elif verdict.status == "FAIL":
                 stats["total_falsified"] += 1
+                # Log counterexample
+                if counterexample_logger and verdict.counterexample:
+                    counterexample_logger.log_counterexample(
+                        law_id=law.law_id,
+                        law_claim=law.claim,
+                        template=law.template.value,
+                        counterexample=verdict.counterexample,
+                        failure_type=verdict.failure_type.value if verdict.failure_type else None,
+                        iteration=iteration,
+                    )
                 # Save to database
                 if persistence:
                     try:

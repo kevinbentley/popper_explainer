@@ -60,7 +60,10 @@ class ExtremeStatesGenerator(Generator):
         rng = random.Random(seed)
 
         grid_lengths = params.get("grid_lengths", [4, 8, 16, 32])
-        include_full_collision = params.get("include_full_collision", True)
+        # Note: X (collision) states are disabled by default since collisions
+        # should only arise from particle interactions, not be initial states.
+        # Having X in initial state violates the physical semantics of the universe.
+        include_full_collision = params.get("include_full_collision", False)
         include_full_movers = params.get("include_full_movers", True)
         include_alternating = params.get("include_alternating", True)
         include_high_density = params.get("include_high_density", True)
@@ -79,12 +82,12 @@ class ExtremeStatesGenerator(Generator):
             generators.append(("full_left", self._generate_full_left))
 
         if include_alternating:
-            generators.append(("alternating_collision", self._generate_alternating_collision))
+            # Note: alternating_collision removed - X states shouldn't be initial states
             generators.append(("alternating_rl", self._generate_alternating_rl))
 
         if include_high_density:
             generators.append(("high_density", self._generate_high_density))
-            generators.append(("near_full_collision", self._generate_near_full_collision))
+            # Note: near_full_collision removed - X states shouldn't be initial states
 
         if not generators:
             return cases

@@ -35,7 +35,8 @@ class HarnessConfig:
     minimization_budget: int = 300
     store_full_trajectories: bool = False
     require_non_vacuous: bool = True
-    min_antecedent_triggers: int = 5  # Require at least 5 antecedent hits for implications
+    min_antecedent_triggers: int = 20  # Require at least 20 antecedent hits for implications
+    min_trigger_diversity: int = 2  # Require triggers from at least 2 different generators
 
     # Generator weights for default strategy
     # pathological_cases is critical for catching false positives from uniform grids

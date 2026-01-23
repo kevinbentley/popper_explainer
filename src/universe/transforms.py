@@ -127,6 +127,43 @@ TRANSFORMS: dict[str, TransformFunc] = {
     "shift_k": shift_k,  # Note: shift_k takes extra arg, handle specially
 }
 
+# =============================================================================
+# TRUE SYMMETRIES OF THE UNIVERSE
+# =============================================================================
+# These transforms commute with time evolution: T(evolve(S)) == evolve(T(S))
+# Laws asserting these symmetries should PASS.
+#
+# Canonical symmetry laws:
+#   - shift_commutation: shift_k(evolve(S)) == evolve(shift_k(S))
+#   - mirror_swap_commutation: mirror_swap(evolve(S)) == evolve(mirror_swap(S))
+# =============================================================================
+
+TRUE_SYMMETRIES: set[str] = {"mirror_swap", "shift_k"}
+
+# =============================================================================
+# FALSE SYMMETRIES (expected to fail)
+# =============================================================================
+# These transforms do NOT commute with evolution. Laws asserting these
+# symmetries should FAIL (and finding counterexamples confirms the physics).
+#
+#   - mirror_only: Spatial reversal without direction swap breaks causality
+#   - swap_only: Direction swap without spatial mirror breaks momentum
+# =============================================================================
+
+FALSE_SYMMETRIES: set[str] = {"mirror_only", "swap_only"}
+
+
+def is_true_symmetry(transform_name: str) -> bool:
+    """Check if a transform is a true symmetry of the universe.
+
+    Args:
+        transform_name: Name of the transform
+
+    Returns:
+        True if the transform commutes with evolution, False otherwise
+    """
+    return transform_name in TRUE_SYMMETRIES
+
 
 def get_transform(name: str) -> TransformFunc | None:
     """Get a transform function by name.

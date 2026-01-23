@@ -108,8 +108,8 @@ class Evaluator:
         total_checks = len(trajectory)
 
         if self._ast_checker is not None:
-            # Use AST-based evaluation
-            passed, t_fail, details = self._ast_checker.check(trajectory)
+            # Use AST-based evaluation (now returns vacuity)
+            passed, t_fail, details, vacuity = self._ast_checker.check(trajectory)
             if not passed:
                 violation_dict = {
                     "t": t_fail,
@@ -117,8 +117,9 @@ class Evaluator:
                     "message": f"Claim failed at t={t_fail}",
                     "details": details,
                 }
-            # AST evaluator doesn't track vacuity yet - use total_checks as placeholder
-            antecedent_hits = total_checks
+            # Extract vacuity from AST checker
+            antecedent_hits = vacuity.antecedent_true_count
+            total_checks = vacuity.total_checks or len(trajectory)
         else:
             # Use string-based evaluation
             # For symmetry_commutation with shift_k, pass k from case metadata
@@ -154,7 +155,11 @@ class Evaluator:
         """Aggregate vacuity information from multiple case results.
 
         This is relevant for implication and eventually templates.
-        For implications, we track how many times the antecedent (LHS) was true.
+        For implications, we track:
+        - How many times the antecedent (LHS) was true (trigger_count)
+        - How many distinct generators produced triggers (trigger_diversity)
+        - Which initial states triggered the antecedent
+
         A test is vacuous if the antecedent is NEVER true.
         """
         if self._current_law is None:
@@ -172,22 +177,32 @@ class Evaluator:
         # Aggregate antecedent hits from all cases
         total_antecedent_hits = 0
         total_checks = 0
-        cases_with_hits = 0
+        triggering_generators: set[str] = set()
+        triggering_states: set[str] = set()
 
         for r in results:
             if r.precondition_met:
                 total_antecedent_hits += r.antecedent_hits
                 total_checks += r.total_checks
+
+                # Track which generators and states produced triggers
                 if r.antecedent_hits > 0:
-                    cases_with_hits += 1
+                    triggering_generators.add(r.case.generator_family)
+                    # Use initial state hash for diversity tracking
+                    state_hash = r.case.content_hash()
+                    triggering_states.add(state_hash)
 
         is_vacuous = total_antecedent_hits == 0
+        trigger_diversity = len(triggering_generators)
 
         return VacuityReport(
             antecedent_true_count=total_antecedent_hits,
             consequent_evaluated_count=total_antecedent_hits,  # For implications, same as antecedent
             total_checks=total_checks,
             is_vacuous=is_vacuous,
+            trigger_diversity=trigger_diversity,
+            triggering_generators=triggering_generators,
+            triggering_states=triggering_states,
         )
 
 

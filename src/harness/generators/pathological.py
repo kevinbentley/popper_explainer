@@ -61,11 +61,12 @@ class PathologicalGenerator(Generator):
 
         for length in lengths:
             # Uniform grids - all same symbol
+            # Note: X (collision) is excluded as it's not a valid initial state -
+            # collisions are the result of particles meeting, not an initial config
             for symbol, type_name in [
                 (">", "uniform_right"),
                 ("<", "uniform_left"),
                 (".", "uniform_empty"),
-                ("X", "uniform_collision"),
             ]:
                 cases.append(Case(
                     initial_state=symbol * length,

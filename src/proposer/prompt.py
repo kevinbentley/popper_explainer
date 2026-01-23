@@ -23,7 +23,7 @@ class UniverseContract:
     symbols: list[str] = field(default_factory=lambda: [".", ">", "<", "X"])
     state_representation: str = "string"
     capabilities: dict[str, Any] = field(default_factory=lambda: {
-        "primitive_observables": ["count(symbol)", "grid_length"],
+        "primitive_observables": ["count(symbol)", "grid_length", "incoming_collisions"],
         "derived_observables_allowed": True,
         "transforms": ["mirror_swap", "shift_k", "swap_only", "mirror_only"],
         "generator_families": [
@@ -108,6 +108,7 @@ Define observables using only these primitives:
 - max_gap(symbol) - longest contiguous run of symbol
 - spread(symbol) - rightmost - leftmost position
 - adjacent_pairs(sym1, sym2) - count of sym1 immediately followed by sym2
+- incoming_collisions - count of cells that WILL have collision at t+1 (see COLLISION PHYSICS below)
 
 CANONICAL OBSERVABLES - USE THESE NAMES for semantic clarity:
 
@@ -123,9 +124,34 @@ NOT CONSERVED (change during collisions):
 - EmptyCells:      count('.')                              -- changes during collisions
 - CollisionCells:  count('X')                              -- X cells resolve next step
 
-CONDITIONALLY CONSERVED (only if no collisions occur):
+CONDITIONALLY CONSERVED (only if no collisions occur AND no X resolving):
 - RightMovers:     count('>')
 - LeftMovers:      count('<')
+
+COLLISION PHYSICS - IMPORTANT:
+- incoming_collisions: Count of cells that will become X at t+1
+  Cell j collides if state[(j-1)%L] in {>,X} AND state[(j+1)%L] in {<,X}
+  Note: X contributes BOTH a right-mover and left-mover when it resolves!
+
+- adjacent_pairs('>', '<') counts >< patterns but >< does NOT cause collision!
+  Particles pass through each other. Use incoming_collisions for collision prediction.
+
+VERIFIED COLLISION LAWS (use these patterns):
+1. BRIDGE LAW: CollisionCells(t+1) == IncomingCollisions(t)
+   This is always true - it's the definition of collision.
+
+2. EXCHANGE RATE: FreeMovers(t+1) - FreeMovers(t) == 2*(CollisionCells(t) - IncomingCollisions(t))
+   Always true. When X resolves (+2 free), when collision forms (-2 free).
+
+3. CONSERVATION requires BOTH conditions:
+   (IncomingCollisions(t) == 0 AND CollisionCells(t) == 0) => FreeMovers(t+1) == FreeMovers(t)
+   WRONG: "CollisionCells(t) == 0 => FreeMovers conserved" (misses incoming collisions)
+   WRONG: "IncomingCollisions(t) == 0 => FreeMovers conserved" (misses X resolution)
+
+4. X RESOLUTION (use local_transition template):
+   Each X cell becomes non-X at that position. But NEW X can form at same spot!
+   WRONG: "CollisionCells(t) > 0 => CollisionCells(t+1) == 0" (new collisions can form)
+   RIGHT: local_transition with trigger_symbol="X", result_op="!=", result_symbol="X"
 
 IMPORTANT: For conservation laws, use TotalParticles, RightComponent, LeftComponent, or Momentum.
 Do NOT use FreeMovers, OccupiedCells, or CollisionCells for conservation laws - they are not conserved!
@@ -281,9 +307,10 @@ class PromptBuilder:
 Claims must be structured JSON ASTs. Observable expressions are defined separately.
 
 OBSERVABLE EXPRESSIONS (in "observables" field):
-  Primitives: count('>'), count('<'), count('X'), count('.'), grid_length
+  Primitives: count('>'), count('<'), count('X'), count('.'), grid_length, incoming_collisions
   Position: leftmost(sym), rightmost(sym), spread(sym), max_gap(sym), adjacent_pairs(s1, s2)
-  Operators: +, -, *, /
+  Operators: +, -, *
+  NOTE: Division / is NOT supported. Rewrite algebraically (e.g., X <= L/2 becomes 2*X <= L)
 
 CANONICAL OBSERVABLE NAMES (use these for clarity):
   CONSERVED:
@@ -295,6 +322,7 @@ CANONICAL OBSERVABLE NAMES (use these for clarity):
     FreeMovers:      count('>') + count('<')                  -- changes during collisions!
     OccupiedCells:   count('>') + count('<') + count('X')     -- changes during collisions!
     CollisionCells:  count('X')                               -- changes each step!
+    IncomingCollisions: incoming_collisions                   -- cells that will have X at t+1
 
 CLAIM AST NODES (in "claim_ast" field):
   Constant:     {"const": 5}
@@ -307,11 +335,18 @@ CLAIM AST NODES (in "claim_ast" field):
   Ops: +, -, *, /, ==, !=, <, <=, >, >=, =>, and, or, not
 
 AST EXAMPLES:
-  TotalParticles(t) == TotalParticles(0) [CONSERVED - correct]:
+  TotalParticles(t) == TotalParticles(0) [invariant - CONSERVED]:
     {"op": "==", "lhs": {"obs": "TotalParticles", "t": {"var": "t"}}, "rhs": {"obs": "TotalParticles", "t": {"const": 0}}}
 
-  CollisionCells(t+1) <= CollisionCells(t) [monotone]:
-    {"op": "<=", "lhs": {"obs": "CollisionCells", "t": {"t_plus_1": true}}, "rhs": {"obs": "CollisionCells", "t": {"var": "t"}}}
+  CollisionCells(t+1) == IncomingCollisions(t) [invariant - BRIDGE LAW]:
+    {"op": "==", "lhs": {"obs": "CollisionCells", "t": {"t_plus_1": true}}, "rhs": {"obs": "IncomingCollisions", "t": {"var": "t"}}}
+
+  (IC==0 AND CC==0) => FreeMovers conserved [implication_step - CONSERVATION]:
+    {"op": "=>",
+     "lhs": {"op": "and",
+             "lhs": {"op": "==", "lhs": {"obs": "IncomingCollisions", "t": {"var": "t"}}, "rhs": {"const": 0}},
+             "rhs": {"op": "==", "lhs": {"obs": "CollisionCells", "t": {"var": "t"}}, "rhs": {"const": 0}}},
+     "rhs": {"op": "==", "lhs": {"obs": "FreeMovers", "t": {"t_plus_1": true}}, "rhs": {"obs": "FreeMovers", "t": {"var": "t"}}}}
 
   P(t) > 0 => Q(t+1) [implication]:
     {"op": "=>", "lhs": {"op": ">", ...}, "rhs": {..., "t": {"t_plus_1": true}}}

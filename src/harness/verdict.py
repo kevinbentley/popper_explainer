@@ -21,6 +21,22 @@ class ReasonCode(str, Enum):
     VACUOUS_PASS = "vacuous_pass"
 
 
+class FailureType(str, Enum):
+    """Classification of FAIL verdicts.
+
+    Distinguishes between genuine law falsification and test infrastructure issues.
+    This separation matters for convergence analysis.
+    """
+
+    # Genuine law falsification - the law is wrong
+    LAW_COUNTEREXAMPLE = "law_counterexample"
+
+    # Test infrastructure issues - not evidence against the law
+    INVALID_INITIAL_STATE = "invalid_initial_state"  # Generator produced invalid t=0 state
+    EVALUATION_ERROR = "evaluation_error"  # Error during evaluation
+    TIMEOUT = "timeout"  # Evaluation timed out
+
+
 @dataclass
 class Counterexample:
     """A minimal counterexample for a failed law.
@@ -96,6 +112,7 @@ class LawVerdict:
     law_id: str
     status: str  # "PASS", "FAIL", "UNKNOWN"
     reason_code: ReasonCode | None = None
+    failure_type: FailureType | None = None  # Classification for FAIL verdicts
     counterexample: Counterexample | None = None
     power_metrics: PowerMetrics = field(default_factory=PowerMetrics)
     vacuity: VacuityReport = field(default_factory=VacuityReport)
@@ -109,6 +126,7 @@ class LawVerdict:
             "law_id": self.law_id,
             "status": self.status,
             "reason_code": self.reason_code.value if self.reason_code else None,
+            "failure_type": self.failure_type.value if self.failure_type else None,
             "counterexample": self.counterexample.to_dict() if self.counterexample else None,
             "power_metrics": self.power_metrics.to_dict(),
             "vacuity": self.vacuity.to_dict(),

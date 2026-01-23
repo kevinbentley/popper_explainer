@@ -8,6 +8,7 @@ Parses strings like:
   leftmost('>') - leftmost('<')
   max_gap('.') * 2
   adjacent_pairs('>', '<')
+  gap_pairs('>', '<', 1)
   spread('>')
 
 Into an AST for evaluation.
@@ -21,7 +22,9 @@ from src.claims.expr_ast import (
     BinOp,
     Count,
     Expr,
+    GapPairs,
     GridLength,
+    IncomingCollisions,
     Leftmost,
     Literal,
     MaxGap,
@@ -53,6 +56,9 @@ SINGLE_SYMBOL_FUNCS = {"count", "leftmost", "rightmost", "max_gap", "spread"}
 # Observable functions that take two symbol arguments
 TWO_SYMBOL_FUNCS = {"adjacent_pairs"}
 
+# Observable functions that take two symbols and an integer
+TWO_SYMBOL_INT_FUNCS = {"gap_pairs"}
+
 
 class ExpressionParser:
     """Parser for observable expressions.
@@ -61,8 +67,9 @@ class ExpressionParser:
         expr     -> term (('+' | '-') term)*
         term     -> factor ('*' factor)*
         factor   -> NUMBER | FUNC | GRID_LENGTH | '(' expr ')'
-        FUNC     -> FUNCNAME '(' SYMBOL (',' SYMBOL)? ')'
-        FUNCNAME -> 'count' | 'leftmost' | 'rightmost' | 'max_gap' | 'spread' | 'adjacent_pairs'
+        FUNC     -> FUNCNAME '(' SYMBOL (',' SYMBOL (',' NUMBER)?)? ')'
+        FUNCNAME -> 'count' | 'leftmost' | 'rightmost' | 'max_gap' | 'spread'
+                  | 'adjacent_pairs' | 'gap_pairs'
         SYMBOL   -> "'" CHAR "'" where CHAR in {'.', '>', '<', 'X'}
     """
 
@@ -71,6 +78,8 @@ class ExpressionParser:
         (r"\s+", None),  # Skip whitespace
         (r"\d+", "NUMBER"),
         (r"adjacent_pairs", "FUNC"),
+        (r"gap_pairs", "FUNC"),
+        (r"incoming_collisions", "INCOMING_COLLISIONS"),  # Nullary, like grid_length
         (r"grid_length", "GRID_LENGTH"),
         (r"leftmost", "FUNC"),
         (r"rightmost", "FUNC"),
@@ -185,6 +194,9 @@ class ExpressionParser:
         elif token.type == "GRID_LENGTH":
             return GridLength(), pos + 1
 
+        elif token.type == "INCOMING_COLLISIONS":
+            return IncomingCollisions(), pos + 1
+
         elif token.type == "FUNC":
             func_name = token.value
             pos += 1
@@ -201,8 +213,9 @@ class ExpressionParser:
                 raise ParseError(f"Invalid symbol '{symbol1}' in {func_name}()")
             pos += 1
 
-            # Check for second argument (for adjacent_pairs)
+            # Check for second argument (for adjacent_pairs, gap_pairs)
             symbol2 = None
+            gap_value = None
             if pos < len(tokens) and tokens[pos].type == "COMMA":
                 pos += 1
                 if pos >= len(tokens) or tokens[pos].type != "SYMBOL":
@@ -211,6 +224,14 @@ class ExpressionParser:
                 if symbol2 not in VALID_SYMBOLS:
                     raise ParseError(f"Invalid symbol '{symbol2}' in {func_name}()")
                 pos += 1
+
+                # Check for third argument (integer gap for gap_pairs)
+                if pos < len(tokens) and tokens[pos].type == "COMMA":
+                    pos += 1
+                    if pos >= len(tokens) or tokens[pos].type != "NUMBER":
+                        raise ParseError(f"Expected integer gap after second comma in {func_name}()")
+                    gap_value = tokens[pos].value
+                    pos += 1
 
             if pos >= len(tokens) or tokens[pos].type != "RPAREN":
                 raise ParseError(f"Expected ')' after symbol(s) at position {token.pos}")
@@ -231,6 +252,12 @@ class ExpressionParser:
                 if symbol2 is None:
                     raise ParseError(f"adjacent_pairs() requires two symbols")
                 return AdjacentPairs(symbol1, symbol2), pos
+            elif func_name == "gap_pairs":
+                if symbol2 is None:
+                    raise ParseError(f"gap_pairs() requires two symbols")
+                if gap_value is None:
+                    raise ParseError(f"gap_pairs() requires a gap integer as third argument")
+                return GapPairs(symbol1, symbol2, gap_value), pos
             else:
                 raise ParseError(f"Unknown function '{func_name}'")
 

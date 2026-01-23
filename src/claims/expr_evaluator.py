@@ -8,7 +8,9 @@ from src.claims.expr_ast import (
     BinOp,
     Count,
     Expr,
+    GapPairs,
     GridLength,
+    IncomingCollisions,
     Leftmost,
     Literal,
     MaxGap,
@@ -19,7 +21,9 @@ from src.claims.expr_ast import (
 from src.universe.observables import (
     adjacent_pairs,
     count_symbol,
+    gap_pairs,
     grid_length,
+    incoming_collisions,
     leftmost,
     max_gap,
     rightmost,
@@ -62,6 +66,9 @@ class ExpressionEvaluator:
         elif isinstance(expr, GridLength):
             return grid_length(state)
 
+        elif isinstance(expr, IncomingCollisions):
+            return incoming_collisions(state)
+
         elif isinstance(expr, Leftmost):
             try:
                 return leftmost(state, expr.symbol)
@@ -85,6 +92,12 @@ class ExpressionEvaluator:
                 return adjacent_pairs(state, expr.symbol1, expr.symbol2)
             except ValueError as e:
                 raise EvaluationError(f"Invalid adjacent_pairs: {e}") from e
+
+        elif isinstance(expr, GapPairs):
+            try:
+                return gap_pairs(state, expr.symbol1, expr.symbol2, expr.gap)
+            except ValueError as e:
+                raise EvaluationError(f"Invalid gap_pairs: {e}") from e
 
         elif isinstance(expr, Spread):
             try:
