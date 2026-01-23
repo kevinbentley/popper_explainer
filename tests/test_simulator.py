@@ -9,6 +9,7 @@ from src.universe.transforms import mirror_only, mirror_swap, shift_k, swap_only
 from src.universe.observables import (
     count_symbol,
     grid_length,
+    incoming_collisions,
     left_component,
     momentum,
     occupied_cells,
@@ -367,3 +368,106 @@ class TestDeterminism:
     def test_step_deterministic(self):
         state = "..X..><."
         assert step(state) == step(state)
+
+
+class TestIncomingCollisions:
+    """Tests for the incoming_collisions observable.
+
+    This is THE canonical observable for predicting collisions.
+    The bridge law CollisionCells(t+1) == IncomingCollisions(t) must hold.
+    """
+
+    def test_basic_converging_pair(self):
+        # ">.<" has right-mover at 0 heading to 1, left-mover at 2 heading to 1
+        # Cell 1 will have incoming collision
+        state = ">.<"
+        assert incoming_collisions(state) == 1
+
+    def test_no_collision(self):
+        # Particles not converging
+        state = ">..<.."
+        assert incoming_collisions(state) == 0
+
+    def test_passing_particles(self):
+        # "><" - particles are adjacent, they pass through each other
+        # At t+1, they swap positions (no collision at any cell)
+        state = "><"
+        # Left neighbor of 0 is 1 (has '<'), right neighbor of 0 is 1 (has '<') - no right-mover from left
+        # Left neighbor of 1 is 0 (has '>'), right neighbor of 1 is 0 (has '>') - no left-mover from right
+        assert incoming_collisions(state) == 0
+
+    def test_x_as_source_both_directions(self):
+        # X emits both a right-mover (to its right) AND left-mover (to its left)
+        # ".X." - X at position 1
+        # Cell 0: left neighbor is 2 (.), right neighbor is 1 (X) - has left-mover from X but no right-mover
+        # Cell 2: left neighbor is 1 (X), right neighbor is 0 (.) - has right-mover from X but no left-mover
+        state = ".X."
+        assert incoming_collisions(state) == 0  # No cell receives BOTH directions
+
+    def test_x_creates_collision_with_particles(self):
+        # "<X" - X at position 1, < at position 0
+        # Cell 0: gets left-mover from X (right neighbor) AND nothing from left
+        # Actually: right neighbor of 0 is 1 (X), left neighbor of 0 is 1 (X) with wrap
+        # Wait, L=2. left_neighbor(0) = (0-1)%2 = 1, right_neighbor(0) = (0+1)%2 = 1
+        # So cell 0 checks: state[1] in {>, X}? Yes (X). state[1] in {<, X}? Yes (X).
+        # Both conditions met for cell 0!
+        state = "<X"
+        assert incoming_collisions(state) == 1
+
+    def test_x_wraps_on_itself(self):
+        # Single X on L=1 grid wraps onto itself
+        state = "X"
+        # Cell 0: left neighbor is 0 (X), right neighbor is 0 (X)
+        # state[0] in {>, X}? Yes. state[0] in {<, X}? Yes.
+        assert incoming_collisions(state) == 1
+
+    def test_multiple_incoming_collisions(self):
+        # Two separate converging pairs
+        state = ">.<.>.<"
+        # Cell 1: left=0 (>), right=2 (<) -> collision
+        # Cell 5: left=4 (>), right=6 (<) -> collision
+        assert incoming_collisions(state) == 2
+
+    def test_empty_state(self):
+        state = ""
+        assert incoming_collisions(state) == 0
+
+    def test_all_empty_cells(self):
+        state = "......"
+        assert incoming_collisions(state) == 0
+
+    def test_bridge_law_basic(self):
+        """Verify CollisionCells(t+1) == IncomingCollisions(t) for basic case."""
+        state = ".>.<.."  # Converging pair
+        s1 = step(state)
+
+        # IncomingCollisions at t should equal CollisionCells at t+1
+        assert incoming_collisions(state) == count_symbol(s1, "X")
+
+    def test_bridge_law_with_existing_collision(self):
+        """Bridge law when collision already exists and resolves."""
+        state = "..X.."  # Collision will resolve
+        s1 = step(state)
+
+        # X resolves to >< (passing), so no collision at t+1
+        assert incoming_collisions(state) == count_symbol(s1, "X")
+
+    def test_bridge_law_collision_chain(self):
+        """Bridge law for multiple steps with collision dynamics."""
+        state = ">....<"  # Will eventually collide
+        traj = run(state, 10)
+
+        for t in range(len(traj) - 1):
+            ic_t = incoming_collisions(traj[t])
+            cc_t1 = count_symbol(traj[t+1], "X")
+            assert ic_t == cc_t1, f"Bridge law failed at t={t}: IC={ic_t}, CC(t+1)={cc_t1}"
+
+    def test_bridge_law_complex(self):
+        """Bridge law for complex state with multiple particles."""
+        state = ">.><.<.X.."
+        traj = run(state, 20)
+
+        for t in range(len(traj) - 1):
+            ic_t = incoming_collisions(traj[t])
+            cc_t1 = count_symbol(traj[t+1], "X")
+            assert ic_t == cc_t1, f"Bridge law failed at t={t}: IC={ic_t}, CC(t+1)={cc_t1}"
