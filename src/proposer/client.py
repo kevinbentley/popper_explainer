@@ -12,24 +12,37 @@ class GeminiConfig:
 
     Attributes:
         api_key: Gemini API key (defaults to GEMINI_API_KEY env var)
-        model: Model to use (default: gemini-1.5-flash)
+        model: Model to use (default: gemini-2.5-flash)
         temperature: Sampling temperature (default: 0.7)
-        max_output_tokens: Maximum tokens in response (default: 4096)
+        max_output_tokens: Maximum tokens in response (default: 16384)
         top_p: Nucleus sampling parameter (default: 0.95)
         top_k: Top-k sampling parameter (default: 40)
+        thinking_budget: Token budget for thinking (None = default, 0 = disabled)
+        json_mode: Whether to request JSON output
     """
 
     api_key: str | None = None
-    model: str = "gemini-1.5-flash"
+    model: str = "gemini-2.5-flash"
     temperature: float = 0.7
-    max_output_tokens: int = 4096
+    max_output_tokens: int = 65535  # Maximum for complex JSON output
     top_p: float = 0.95
     top_k: int = 40
+    thinking_budget: int | None = None  # Let model decide
+    json_mode: bool = True
 
     def __post_init__(self):
         if self.api_key is None:
             # Check both common environment variable names
             self.api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+
+
+@dataclass
+class TokenUsage:
+    """Token usage statistics from a generation."""
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+    thinking_tokens: int = 0
+    total_tokens: int = 0
 
 
 class GeminiClient:
@@ -38,6 +51,7 @@ class GeminiClient:
     Usage:
         client = GeminiClient(config)
         response = client.generate(prompt)
+        print(client.last_usage)  # Token usage
     """
 
     def __init__(self, config: GeminiConfig | None = None):
@@ -49,6 +63,7 @@ class GeminiClient:
         self.config = config or GeminiConfig()
         self._client = None
         self._model = None
+        self.last_usage: TokenUsage | None = None
 
     def _ensure_initialized(self) -> None:
         """Lazily initialize the Gemini client."""
@@ -100,6 +115,16 @@ class GeminiClient:
             "top_k": self.config.top_k,
         }
 
+        # Enable JSON mode if configured
+        if self.config.json_mode:
+            generation_config["response_mime_type"] = "application/json"
+
+        # Configure thinking budget if specified
+        if self.config.thinking_budget is not None:
+            generation_config["thinking_config"] = {
+                "thinking_budget": self.config.thinking_budget
+            }
+
         # Create model with system instruction if provided
         if system_instruction:
             model = self._client.GenerativeModel(
@@ -114,7 +139,23 @@ class GeminiClient:
             generation_config=generation_config,
         )
 
+        # Track token usage
+        self._extract_usage(response)
+
         return response.text
+
+    def _extract_usage(self, response) -> None:
+        """Extract token usage from response."""
+        try:
+            usage = response.usage_metadata
+            self.last_usage = TokenUsage(
+                prompt_tokens=getattr(usage, 'prompt_token_count', 0),
+                output_tokens=getattr(usage, 'candidates_token_count', 0),
+                thinking_tokens=getattr(usage, 'thoughts_token_count', 0) if hasattr(usage, 'thoughts_token_count') else 0,
+                total_tokens=getattr(usage, 'total_token_count', 0),
+            )
+        except Exception:
+            self.last_usage = None
 
     def generate_json(
         self,

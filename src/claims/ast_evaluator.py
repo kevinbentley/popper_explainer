@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from src.claims.ast_schema import ARITHMETIC_OPS, COMPARISON_OPS, LOGICAL_OPS, validate_claim_ast
 from src.claims.expr_ast import Expr
-from src.claims.expr_evaluator import evaluate_expression
+from src.claims.expr_evaluator import EvaluationError, evaluate_expression
 from src.claims.expr_parser import ExpressionParser
 from src.claims.schema import CandidateLaw, Observable, Template
 from src.universe.types import State, Trajectory
@@ -87,7 +87,10 @@ class ASTClaimEvaluator:
 
             # Evaluate the observable at that time
             state = trajectory[time_idx]
-            return evaluate_expression(self._observable_exprs[obs_name], state)
+            try:
+                return evaluate_expression(self._observable_exprs[obs_name], state)
+            except EvaluationError as e:
+                raise ASTEvaluationError(f"Observable '{obs_name}' evaluation failed: {e}") from e
 
         elif "op" in ast:
             op = ast["op"]
@@ -152,6 +155,9 @@ class ASTClaimEvaluator:
                     return False, t, {"t": t}
             except ASTEvaluationError as e:
                 return False, t, {"error": str(e)}
+            except Exception as e:
+                # Catch any other exceptions (e.g., EvaluationError from expr_evaluator)
+                return False, t, {"error": f"Evaluation error: {e}"}
 
         return True, None, None
 
@@ -190,6 +196,8 @@ class ASTClaimEvaluator:
                         }
             except ASTEvaluationError as e:
                 return False, t, {"error": str(e)}
+            except Exception as e:
+                return False, t, {"error": f"Evaluation error: {e}"}
 
         return True, None, None
 
@@ -224,6 +232,8 @@ class ASTClaimEvaluator:
                         }
             except ASTEvaluationError as e:
                 return False, t, {"error": str(e)}
+            except Exception as e:
+                return False, t, {"error": f"Evaluation error: {e}"}
 
         return True, None, None
 
@@ -246,6 +256,8 @@ class ASTClaimEvaluator:
                     return False, t, {"t": t}
             except ASTEvaluationError as e:
                 return False, t, {"error": str(e)}
+            except Exception as e:
+                return False, t, {"error": f"Evaluation error: {e}"}
 
         return True, None, None
 
@@ -266,6 +278,8 @@ class ASTClaimEvaluator:
                     return False, t, {"t": t}
             except ASTEvaluationError as e:
                 return False, t, {"error": str(e)}
+            except Exception as e:
+                return False, t, {"error": f"Evaluation error: {e}"}
 
         return True, None, None
 
@@ -308,6 +322,8 @@ class ASTClaimEvaluator:
                         }
             except ASTEvaluationError as e:
                 return False, t0, {"error": str(e)}
+            except Exception as e:
+                return False, t0, {"error": f"Evaluation error: {e}"}
 
         return True, None, None
 

@@ -82,12 +82,14 @@ class ProposerConfig:
         include_counterexamples: Whether to include counterexample gallery
         strict_parsing: Whether to reject laws with any issues
         add_to_redundancy_filter: Whether to add proposed laws to filter
+        verbose: Whether to store full prompts/responses for debugging
     """
 
     max_token_budget: int = 8000
     include_counterexamples: bool = True
     strict_parsing: bool = False
     add_to_redundancy_filter: bool = True
+    verbose: bool = False
 
 
 class LawProposer:
@@ -126,6 +128,11 @@ class LawProposer:
         # Audit log
         self._iterations: list[dict[str, Any]] = []
 
+        # Verbose logging storage
+        self._last_system_instruction: str = ""
+        self._last_prompt: str = ""
+        self._last_response: str = ""
+
     def propose(
         self,
         memory: DiscoveryMemorySnapshot | DiscoveryMemory,
@@ -163,12 +170,19 @@ class LawProposer:
 
         # Get LLM response
         system_instruction = self._prompt_builder.get_system_instruction()
+
+        # Store for verbose logging
+        self._last_system_instruction = system_instruction
+        self._last_prompt = prompt
+        self._last_response = ""
+
         try:
             response = self.client.generate(
                 prompt,
                 system_instruction=system_instruction,
                 temperature=request.temperature,
             )
+            self._last_response = response
         except Exception as e:
             return ProposalBatch(
                 prompt_hash=prompt_hash,
@@ -263,4 +277,16 @@ class LawProposer:
             "total_rejections": total_rejections,
             "total_redundant": total_redundant,
             "known_laws_in_filter": self._redundancy.known_count,
+        }
+
+    def get_last_exchange(self) -> dict[str, str]:
+        """Get the last prompt/response exchange for debugging.
+
+        Returns:
+            Dict with system_instruction, prompt, and response
+        """
+        return {
+            "system_instruction": self._last_system_instruction,
+            "prompt": self._last_prompt,
+            "response": self._last_response,
         }

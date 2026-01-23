@@ -217,6 +217,19 @@ class Harness:
         cases: list[Case] = []
         seed = self.config.seed
 
+        # CRITICAL: Always include pathological baseline cases first.
+        # These catch false positives from generator coverage gaps (e.g., uniform grids).
+        pathological_gen = GeneratorRegistry.create("pathological_cases")
+        if pathological_gen:
+            pathological_params = self._get_default_params("pathological_cases", law)
+            # Always generate a baseline set of pathological cases
+            baseline_count = min(20, self.config.max_cases // 5)
+            pathological_cases = pathological_gen.generate(
+                pathological_params, seed, baseline_count
+            )
+            cases.extend(pathological_cases)
+            seed += len(pathological_cases)
+
         # Use proposed tests if available
         for proposed in law.proposed_tests:
             generator = GeneratorRegistry.create(proposed.family)
@@ -287,6 +300,12 @@ class Harness:
                 "grid_lengths": [8, 16, 32],
                 "transform": law.transform or "mirror_swap",
                 "bias_asymmetric": 0.7,
+            }
+        elif family_name == "pathological_cases":
+            return {
+                "min_length": 1,
+                "max_length": 20,
+                "include_empty": True,
             }
         return {}
 

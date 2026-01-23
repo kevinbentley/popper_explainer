@@ -113,10 +113,16 @@ EXAMPLES:
 2. Monotone "X_count(t+1) <= X_count(t)":
    {"op": "<=", "lhs": {"obs": "X_count", "t": {"t_plus_1": true}}, "rhs": {"obs": "X_count", "t": {"var": "t"}}}
 
-3. Implication "X_count(t) > 0 => X_count(t+1) == 0":
+3. Implication (implication_step or implication_state) - MUST have "=>" at root:
    {"op": "=>",
     "lhs": {"op": ">", "lhs": {"obs": "X_count", "t": {"var": "t"}}, "rhs": {"const": 0}},
     "rhs": {"op": "==", "lhs": {"obs": "X_count", "t": {"t_plus_1": true}}, "rhs": {"const": 0}}}
+
+4. Eventually - MUST have "=>" at root (antecedent => consequent):
+   {"op": "=>",
+    "lhs": {"op": ">", "lhs": {"obs": "X_count", "t": {"var": "t"}}, "rhs": {"const": 0}},
+    "rhs": {"op": "==", "lhs": {"obs": "X_count", "t": {"var": "t"}}, "rhs": {"const": 0}}}
+   (means: if X_count > 0 at t0, then eventually X_count == 0 within horizon H)
 
 4. Bound "N(t) <= grid_length":
    {"op": "<=", "lhs": {"obs": "N", "t": {"var": "t"}}, "rhs": {"obs": "grid_len", "t": {"var": "t"}}}
@@ -283,21 +289,30 @@ For symmetry_commutation: include "transform" field, claim_ast can be null."""
 
     def _build_accepted_section(self, laws: list[dict[str, Any]]) -> str:
         """Build accepted laws section."""
-        lines = ["=== ACCEPTED LAWS (do not repeat) ==="]
+        lines = ["=== ACCEPTED LAWS (do not repeat these or equivalent variations) ==="]
         for law in laws:
             lines.append(f"- [{law['template']}] {law['law_id']}: {law['claim']}")
+            # Show observable definitions to prevent equivalent re-proposals
+            if law.get("observables"):
+                obs_strs = [f"{o['name']}={o['expr']}" for o in law["observables"]]
+                lines.append(f"    observables: {', '.join(obs_strs)}")
         return "\n".join(lines)
 
     def _build_falsified_section(self, laws: list[dict[str, Any]]) -> str:
         """Build falsified laws section."""
-        lines = ["=== FALSIFIED LAWS (do not repeat) ==="]
+        lines = ["=== FALSIFIED LAWS (do not repeat these or equivalent variations) ==="]
         for law in laws:
             cx = law.get("counterexample", {})
             lines.append(
                 f"- [{law['template']}] {law['law_id']}: {law['claim']}"
             )
+            # Show observable definitions
+            if law.get("observables"):
+                obs_strs = [f"{o['name']}={o['expr']}" for o in law.get("observables", [])]
+                if obs_strs:
+                    lines.append(f"    observables: {', '.join(obs_strs)}")
             if cx:
-                lines.append(f"  Counterexample: state='{cx.get('initial_state', '?')}', t_fail={cx.get('t_fail', '?')}")
+                lines.append(f"    counterexample: state='{cx.get('initial_state', '?')}', t_fail={cx.get('t_fail', '?')}")
         return "\n".join(lines)
 
     def _build_unknown_section(self, laws: list[dict[str, Any]]) -> str:

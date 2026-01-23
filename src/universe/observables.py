@@ -104,10 +104,115 @@ def occupied_cells(state: State) -> int:
     return count_right(state) + count_left(state) + count_collision(state)
 
 
+# --- Position-based observables (enable spatial reasoning) ---
+
+def leftmost(state: State, symbol: str) -> int:
+    """Find the position of the leftmost occurrence of a symbol.
+
+    Args:
+        state: State string
+        symbol: Symbol to find
+
+    Returns:
+        0-indexed position, or -1 if not found
+    """
+    if symbol not in VALID_SYMBOLS:
+        raise ValueError(f"Invalid symbol '{symbol}'")
+    pos = state.find(symbol)
+    return pos
+
+
+def rightmost(state: State, symbol: str) -> int:
+    """Find the position of the rightmost occurrence of a symbol.
+
+    Args:
+        state: State string
+        symbol: Symbol to find
+
+    Returns:
+        0-indexed position, or -1 if not found
+    """
+    if symbol not in VALID_SYMBOLS:
+        raise ValueError(f"Invalid symbol '{symbol}'")
+    pos = state.rfind(symbol)
+    return pos
+
+
+def max_gap(state: State, symbol: str = ".") -> int:
+    """Find the length of the longest contiguous run of a symbol.
+
+    Args:
+        state: State string
+        symbol: Symbol to measure gaps of (default: empty cells)
+
+    Returns:
+        Length of longest contiguous run, or 0 if none
+    """
+    if symbol not in VALID_SYMBOLS:
+        raise ValueError(f"Invalid symbol '{symbol}'")
+
+    max_run = 0
+    current_run = 0
+
+    for c in state:
+        if c == symbol:
+            current_run += 1
+            max_run = max(max_run, current_run)
+        else:
+            current_run = 0
+
+    return max_run
+
+
+def adjacent_pairs(state: State, sym1: str, sym2: str) -> int:
+    """Count adjacent pairs of symbols (sym1 immediately followed by sym2).
+
+    Args:
+        state: State string
+        sym1: First symbol
+        sym2: Second symbol
+
+    Returns:
+        Count of adjacent pairs
+    """
+    if sym1 not in VALID_SYMBOLS or sym2 not in VALID_SYMBOLS:
+        raise ValueError(f"Invalid symbols")
+
+    count = 0
+    for i in range(len(state) - 1):
+        if state[i] == sym1 and state[i + 1] == sym2:
+            count += 1
+    return count
+
+
+def spread(state: State, symbol: str) -> int:
+    """Measure the spread of a symbol: rightmost - leftmost position.
+
+    Returns 0 if symbol appears 0 or 1 times.
+
+    Args:
+        state: State string
+        symbol: Symbol to measure
+
+    Returns:
+        Spread (rightmost - leftmost), or 0
+    """
+    left = leftmost(state, symbol)
+    if left == -1:
+        return 0
+    right = rightmost(state, symbol)
+    return right - left
+
+
 # Registry of primitive observables for capability checking
 PRIMITIVE_OBSERVABLES: dict[str, str] = {
     "count": "count(symbol) - count occurrences of a symbol",
     "grid_length": "grid_length - length of the state",
+    "leftmost": "leftmost(symbol) - position of first occurrence (-1 if none)",
+    "rightmost": "rightmost(symbol) - position of last occurrence (-1 if none)",
+    "max_gap": "max_gap(symbol) - longest contiguous run of symbol",
+    "adjacent_pairs": "adjacent_pairs(sym1, sym2) - count of sym1 followed by sym2",
+    "spread": "spread(symbol) - rightmost - leftmost position",
 }
 
 

@@ -4,6 +4,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any
 
+from src.claims.fingerprint import compute_semantic_fingerprint
 from src.claims.schema import CandidateLaw
 
 
@@ -14,7 +15,7 @@ class RedundancyMatch:
     Attributes:
         matched_law_id: ID of the matching law
         similarity: Similarity score (0-1)
-        match_type: Type of match (exact, normalized, semantic)
+        match_type: Type of match (exact, normalized, semantic, fingerprint)
         details: Additional match details
     """
 
@@ -27,20 +28,24 @@ class RedundancyMatch:
 class RedundancyDetector:
     """Detects redundant law proposals.
 
-    Uses multiple strategies:
-    1. Exact hash matching
-    2. Normalized form matching
-    3. Semantic similarity heuristics
+    Uses multiple strategies (in order):
+    1. Exact hash matching (identical content)
+    2. Semantic fingerprint matching (equivalent meaning, different names)
+    3. Normalized form matching (syntactic variations)
+    4. Semantic similarity heuristics (optional, for fuzzy matching)
     """
 
-    def __init__(self, similarity_threshold: float = 0.8):
+    def __init__(self, similarity_threshold: float = 0.0, use_semantic: bool = False):
         """Initialize redundancy detector.
 
         Args:
-            similarity_threshold: Minimum similarity to consider redundant
+            similarity_threshold: Minimum similarity to consider redundant (if use_semantic=True)
+            use_semantic: Whether to use fuzzy semantic matching (default: False for thoroughness)
         """
         self.similarity_threshold = similarity_threshold
+        self.use_semantic = use_semantic
         self._known_hashes: dict[str, str] = {}  # hash -> law_id
+        self._known_fingerprints: dict[str, str] = {}  # semantic fingerprint -> law_id
         self._known_normalized: dict[str, str] = {}  # normalized -> law_id
         self._known_laws: dict[str, CandidateLaw] = {}  # law_id -> law
 
@@ -53,6 +58,10 @@ class RedundancyDetector:
         # Store by exact hash
         exact_hash = self._compute_exact_hash(law)
         self._known_hashes[exact_hash] = law.law_id
+
+        # Store by semantic fingerprint
+        fingerprint = compute_semantic_fingerprint(law)
+        self._known_fingerprints[fingerprint] = law.law_id
 
         # Store by normalized form
         normalized = self._normalize_law(law)
@@ -81,6 +90,16 @@ class RedundancyDetector:
                 details="Exact content hash match",
             )
 
+        # Check semantic fingerprint (catches "momentum_conserved" vs "net_momentum_conserved")
+        fingerprint = compute_semantic_fingerprint(law)
+        if fingerprint in self._known_fingerprints:
+            return RedundancyMatch(
+                matched_law_id=self._known_fingerprints[fingerprint],
+                similarity=1.0,
+                match_type="fingerprint",
+                details=f"Semantic fingerprint match: {fingerprint[:12]}...",
+            )
+
         # Check normalized form
         normalized = self._normalize_law(law)
         normalized_hash = hashlib.sha256(normalized.encode()).hexdigest()[:16]
@@ -92,16 +111,17 @@ class RedundancyDetector:
                 details="Normalized form match",
             )
 
-        # Check semantic similarity
-        for known_id, known_law in self._known_laws.items():
-            similarity = self._compute_similarity(law, known_law)
-            if similarity >= self.similarity_threshold:
-                return RedundancyMatch(
-                    matched_law_id=known_id,
-                    similarity=similarity,
-                    match_type="semantic",
-                    details=f"High similarity score: {similarity:.2f}",
-                )
+        # Check semantic similarity (only if enabled)
+        if self.use_semantic and self.similarity_threshold > 0:
+            for known_id, known_law in self._known_laws.items():
+                similarity = self._compute_similarity(law, known_law)
+                if similarity >= self.similarity_threshold:
+                    return RedundancyMatch(
+                        matched_law_id=known_id,
+                        similarity=similarity,
+                        match_type="semantic",
+                        details=f"High similarity score: {similarity:.2f}",
+                    )
 
         return None
 
@@ -119,8 +139,9 @@ class RedundancyDetector:
         non_redundant = []
         redundant = []
 
-        # Also track within-batch duplicates
+        # Track within-batch duplicates by both exact hash and fingerprint
         batch_hashes: dict[str, CandidateLaw] = {}
+        batch_fingerprints: dict[str, CandidateLaw] = {}
 
         for law in laws:
             # Check against known laws
@@ -129,20 +150,33 @@ class RedundancyDetector:
                 redundant.append((law, match))
                 continue
 
-            # Check against earlier items in this batch
+            # Check against earlier items in this batch (exact hash)
             exact_hash = self._compute_exact_hash(law)
             if exact_hash in batch_hashes:
                 match = RedundancyMatch(
                     matched_law_id=batch_hashes[exact_hash].law_id,
                     similarity=1.0,
                     match_type="batch_duplicate",
-                    details="Duplicate within same batch",
+                    details="Exact duplicate within same batch",
+                )
+                redundant.append((law, match))
+                continue
+
+            # Check against earlier items in this batch (semantic fingerprint)
+            fingerprint = compute_semantic_fingerprint(law)
+            if fingerprint in batch_fingerprints:
+                match = RedundancyMatch(
+                    matched_law_id=batch_fingerprints[fingerprint].law_id,
+                    similarity=1.0,
+                    match_type="batch_fingerprint",
+                    details="Semantic duplicate within same batch",
                 )
                 redundant.append((law, match))
                 continue
 
             # Not redundant
             batch_hashes[exact_hash] = law
+            batch_fingerprints[fingerprint] = law
             non_redundant.append(law)
 
         return non_redundant, redundant

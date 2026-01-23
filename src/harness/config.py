@@ -36,11 +36,13 @@ class HarnessConfig:
     require_non_vacuous: bool = True
 
     # Generator weights for default strategy
+    # pathological_cases is critical for catching false positives from uniform grids
     generator_weights: dict[str, float] = field(default_factory=lambda: {
-        "random_density_sweep": 0.4,
-        "constrained_pair_interactions": 0.3,
+        "random_density_sweep": 0.35,
+        "constrained_pair_interactions": 0.25,
         "edge_wrapping_cases": 0.15,
         "symmetry_metamorphic_suite": 0.15,
+        "pathological_cases": 0.10,  # Uniform grids, alternating patterns, edge cases
     })
 
     def content_hash(self) -> str:

@@ -63,6 +63,13 @@ class ConstrainedPairGenerator(Generator):
         grid_lengths = params.get("grid_lengths", [8, 16, 32])
         include_collision = params.get("include_collision_state", True)
 
+        # Validate pattern names - filter out invalid ones
+        valid_patterns = [p for p in patterns if p in self.PATTERNS]
+        if not valid_patterns:
+            # Fall back to defaults if no valid patterns
+            valid_patterns = list(self.PATTERNS.keys())
+        patterns = valid_patterns
+
         if not include_collision:
             patterns = [p for p in patterns if p != "collision"]
 

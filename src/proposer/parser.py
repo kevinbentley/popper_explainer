@@ -97,7 +97,7 @@ class ResponseParser:
         return result
 
     def _extract_json(self, text: str) -> Any:
-        """Extract JSON from text, handling markdown code blocks."""
+        """Extract JSON from text, handling markdown code blocks and common LLM errors."""
         text = text.strip()
 
         # Check for markdown code blocks
@@ -107,7 +107,69 @@ class ResponseParser:
             if match:
                 text = match.group(1).strip()
 
+        # Sanitize common LLM JSON errors
+        text = self._sanitize_json(text)
+
         return json.loads(text)
+
+    def _sanitize_json(self, text: str) -> str:
+        """Sanitize common LLM JSON formatting errors.
+
+        Handles:
+        - Stray backticks from markdown formatting
+        - Trailing commas before closing brackets
+        - JavaScript-style comments
+        """
+        # Remove stray backticks (common markdown artifact)
+        # But preserve backticks that are part of string content
+        # Strategy: remove backticks that appear outside of quoted strings
+        result = []
+        in_string = False
+        escape_next = False
+        i = 0
+
+        while i < len(text):
+            char = text[i]
+
+            if escape_next:
+                result.append(char)
+                escape_next = False
+                i += 1
+                continue
+
+            if char == '\\' and in_string:
+                result.append(char)
+                escape_next = True
+                i += 1
+                continue
+
+            if char == '"':
+                in_string = not in_string
+                result.append(char)
+                i += 1
+                continue
+
+            if char == '`' and not in_string:
+                # Skip stray backticks outside strings
+                i += 1
+                continue
+
+            result.append(char)
+            i += 1
+
+        text = ''.join(result)
+
+        # Remove trailing commas before ] or }
+        # Pattern: comma followed by optional whitespace and closing bracket
+        text = re.sub(r',(\s*[}\]])', r'\1', text)
+
+        # Remove JavaScript-style comments (// and /* */)
+        # Single-line comments
+        text = re.sub(r'//[^\n]*', '', text)
+        # Multi-line comments
+        text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+
+        return text.strip()
 
     def _parse_law(self, data: dict[str, Any], index: int) -> CandidateLaw:
         """Parse a single law from JSON data.

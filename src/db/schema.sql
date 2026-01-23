@@ -1,5 +1,5 @@
 -- Popper Explainer Database Schema
--- Version: 1
+-- Version: 2
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -104,3 +104,42 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit_logs(operation);
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
+
+-- Escalation runs: one record per escalation event
+CREATE TABLE IF NOT EXISTS escalation_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    level TEXT NOT NULL,
+    harness_config_hash TEXT NOT NULL,
+    sim_hash TEXT NOT NULL,
+    seed INTEGER NOT NULL,
+    laws_tested INTEGER NOT NULL,
+    stable_count INTEGER NOT NULL,
+    revoked_count INTEGER NOT NULL,
+    downgraded_count INTEGER NOT NULL,
+    runtime_ms INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_escalation_runs_level ON escalation_runs(level);
+CREATE INDEX IF NOT EXISTS idx_escalation_runs_created ON escalation_runs(created_at);
+
+-- Law retests: one per law per escalation run
+CREATE TABLE IF NOT EXISTS law_retests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    escalation_run_id INTEGER NOT NULL,
+    law_id TEXT NOT NULL,
+    old_status TEXT NOT NULL,
+    new_status TEXT NOT NULL,
+    flip_type TEXT NOT NULL,
+    evaluation_id INTEGER,
+    counterexample_id INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (escalation_run_id) REFERENCES escalation_runs(id),
+    FOREIGN KEY (law_id) REFERENCES laws(law_id),
+    FOREIGN KEY (evaluation_id) REFERENCES evaluations(id),
+    FOREIGN KEY (counterexample_id) REFERENCES counterexamples(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_law_retests_run ON law_retests(escalation_run_id);
+CREATE INDEX IF NOT EXISTS idx_law_retests_law ON law_retests(law_id);
+CREATE INDEX IF NOT EXISTS idx_law_retests_flip ON law_retests(flip_type);

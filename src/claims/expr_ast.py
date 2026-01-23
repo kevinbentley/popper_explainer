@@ -1,13 +1,16 @@
 """AST nodes for observable expressions.
 
-The expression language is intentionally minimal:
+The expression language supports:
 - count('<symbol>') - count occurrences of a symbol
 - grid_length - length of the state
+- leftmost('<symbol>') - position of first occurrence (-1 if none)
+- rightmost('<symbol>') - position of last occurrence (-1 if none)
+- max_gap('<symbol>') - longest contiguous run of symbol
+- adjacent_pairs('<s1>', '<s2>') - count of s1 followed by s2
+- spread('<symbol>') - rightmost - leftmost position
 - Integer literals
 - Binary operators: +, -, *
 - Parentheses for grouping
-
-This is a CLOSED set - no other constructs are allowed.
 """
 
 from dataclasses import dataclass
@@ -52,6 +55,57 @@ class GridLength:
 
 
 @dataclass(frozen=True)
+class Leftmost:
+    """leftmost('<symbol>') - position of first occurrence (-1 if none)."""
+
+    symbol: str
+
+    def __repr__(self) -> str:
+        return f"Leftmost('{self.symbol}')"
+
+
+@dataclass(frozen=True)
+class Rightmost:
+    """rightmost('<symbol>') - position of last occurrence (-1 if none)."""
+
+    symbol: str
+
+    def __repr__(self) -> str:
+        return f"Rightmost('{self.symbol}')"
+
+
+@dataclass(frozen=True)
+class MaxGap:
+    """max_gap('<symbol>') - longest contiguous run of symbol."""
+
+    symbol: str
+
+    def __repr__(self) -> str:
+        return f"MaxGap('{self.symbol}')"
+
+
+@dataclass(frozen=True)
+class AdjacentPairs:
+    """adjacent_pairs('<s1>', '<s2>') - count of s1 immediately followed by s2."""
+
+    symbol1: str
+    symbol2: str
+
+    def __repr__(self) -> str:
+        return f"AdjacentPairs('{self.symbol1}', '{self.symbol2}')"
+
+
+@dataclass(frozen=True)
+class Spread:
+    """spread('<symbol>') - rightmost - leftmost position (0 if <2 occurrences)."""
+
+    symbol: str
+
+    def __repr__(self) -> str:
+        return f"Spread('{self.symbol}')"
+
+
+@dataclass(frozen=True)
 class BinOp:
     """A binary operation: left op right."""
 
@@ -64,7 +118,7 @@ class BinOp:
 
 
 # Union type for all expression nodes
-Expr = Union[Literal, Count, GridLength, BinOp]
+Expr = Union[Literal, Count, GridLength, Leftmost, Rightmost, MaxGap, AdjacentPairs, Spread, BinOp]
 
 
 def expr_to_string(expr: Expr) -> str:
@@ -75,6 +129,16 @@ def expr_to_string(expr: Expr) -> str:
         return f"count('{expr.symbol}')"
     elif isinstance(expr, GridLength):
         return "grid_length"
+    elif isinstance(expr, Leftmost):
+        return f"leftmost('{expr.symbol}')"
+    elif isinstance(expr, Rightmost):
+        return f"rightmost('{expr.symbol}')"
+    elif isinstance(expr, MaxGap):
+        return f"max_gap('{expr.symbol}')"
+    elif isinstance(expr, AdjacentPairs):
+        return f"adjacent_pairs('{expr.symbol1}', '{expr.symbol2}')"
+    elif isinstance(expr, Spread):
+        return f"spread('{expr.symbol}')"
     elif isinstance(expr, BinOp):
         left_str = expr_to_string(expr.left)
         right_str = expr_to_string(expr.right)

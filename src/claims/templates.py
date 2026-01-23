@@ -291,9 +291,16 @@ class SymmetryCommutationChecker(TemplateChecker):
     def __init__(self, transform_name: str, time_horizon: int):
         self.transform_name = transform_name
         self.time_horizon = time_horizon
-        self._transform = get_transform(transform_name)
-        if self._transform is None:
+        self._raw_transform = get_transform(transform_name)
+        if self._raw_transform is None:
             raise ValueError(f"Unknown transform: {transform_name}")
+
+        # Handle transforms that need extra arguments (e.g., shift_k needs k)
+        if transform_name == "shift_k":
+            # Create a wrapper that uses k=1 (shift by 1 position)
+            self._transform = lambda state: self._raw_transform(state, 1)
+        else:
+            self._transform = self._raw_transform
 
     def check(self, trajectory: Trajectory) -> CheckResult:
         """Check symmetry commutation for the initial state.

@@ -3,8 +3,28 @@
 Takes an expression AST and a state, returns an integer value.
 """
 
-from src.claims.expr_ast import BinOp, Count, Expr, GridLength, Literal, Operator
-from src.universe.observables import count_symbol, grid_length
+from src.claims.expr_ast import (
+    AdjacentPairs,
+    BinOp,
+    Count,
+    Expr,
+    GridLength,
+    Leftmost,
+    Literal,
+    MaxGap,
+    Operator,
+    Rightmost,
+    Spread,
+)
+from src.universe.observables import (
+    adjacent_pairs,
+    count_symbol,
+    grid_length,
+    leftmost,
+    max_gap,
+    rightmost,
+    spread,
+)
 from src.universe.types import State
 
 
@@ -41,6 +61,36 @@ class ExpressionEvaluator:
 
         elif isinstance(expr, GridLength):
             return grid_length(state)
+
+        elif isinstance(expr, Leftmost):
+            try:
+                return leftmost(state, expr.symbol)
+            except ValueError as e:
+                raise EvaluationError(f"Invalid leftmost: {e}") from e
+
+        elif isinstance(expr, Rightmost):
+            try:
+                return rightmost(state, expr.symbol)
+            except ValueError as e:
+                raise EvaluationError(f"Invalid rightmost: {e}") from e
+
+        elif isinstance(expr, MaxGap):
+            try:
+                return max_gap(state, expr.symbol)
+            except ValueError as e:
+                raise EvaluationError(f"Invalid max_gap: {e}") from e
+
+        elif isinstance(expr, AdjacentPairs):
+            try:
+                return adjacent_pairs(state, expr.symbol1, expr.symbol2)
+            except ValueError as e:
+                raise EvaluationError(f"Invalid adjacent_pairs: {e}") from e
+
+        elif isinstance(expr, Spread):
+            try:
+                return spread(state, expr.symbol)
+            except ValueError as e:
+                raise EvaluationError(f"Invalid spread: {e}") from e
 
         elif isinstance(expr, BinOp):
             left_val = self.evaluate(expr.left, state)

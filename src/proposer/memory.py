@@ -163,6 +163,10 @@ class DiscoveryMemory:
                     {"lhs": p.lhs, "op": p.op.value, "rhs": p.rhs}
                     for p in law.preconditions
                 ],
+                "observables": [
+                    {"name": o.name, "expr": o.expr}
+                    for o in law.observables
+                ],
             }
             if verdict.counterexample:
                 item["counterexample"] = {

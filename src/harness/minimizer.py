@@ -8,6 +8,7 @@ from src.claims.schema import CandidateLaw
 from src.harness.case import Case
 from src.harness.evaluator import Evaluator
 from src.harness.verdict import Counterexample
+from src.universe.simulator import run
 from src.universe.types import Config, Symbol
 
 
@@ -75,13 +76,19 @@ class Minimizer:
         # Strategy 3: Try to shrink grid (harder, skip for now)
         # This would require more sophisticated state transformation
 
+        # Regenerate trajectory excerpt from minimized state
+        trajectory = run(current_state, current_t_fail, current_config)
+        excerpt_start = max(0, current_t_fail - 2)
+        excerpt_end = min(len(trajectory), current_t_fail + 3)
+        trajectory_excerpt = trajectory[excerpt_start:excerpt_end]
+
         return Counterexample(
             initial_state=current_state,
             config={"grid_length": current_config.grid_length, "boundary": "periodic"},
             seed=counterexample.seed,
             t_max=current_t_fail,
             t_fail=current_t_fail,
-            trajectory_excerpt=counterexample.trajectory_excerpt,
+            trajectory_excerpt=trajectory_excerpt,
             observables_at_fail=counterexample.observables_at_fail,
             witness=counterexample.witness,
             minimized=True,

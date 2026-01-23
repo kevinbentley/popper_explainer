@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from src.db.escalation_models import EscalationRunRecord, LawRetestRecord
 from src.db.models import (
     AuditLogRecord,
     CaseSetRecord,
@@ -14,7 +15,7 @@ from src.db.models import (
     TheoryRecord,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class Repository:
@@ -24,10 +25,17 @@ class Repository:
         self.db_path = Path(db_path)
         self._conn: sqlite3.Connection | None = None
 
-    def connect(self) -> None:
-        """Open database connection and ensure schema exists."""
-        self._conn = sqlite3.connect(self.db_path)
+    def connect(self, enable_wal: bool = True) -> None:
+        """Open database connection and ensure schema exists.
+
+        Args:
+            enable_wal: Enable WAL mode for better concurrent access (default True)
+        """
+        self._conn = sqlite3.connect(self.db_path, timeout=30.0)
         self._conn.row_factory = sqlite3.Row
+        if enable_wal:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA busy_timeout=30000")
         self._ensure_schema()
 
     def close(self) -> None:
@@ -477,3 +485,332 @@ class Repository:
             (status, limit),
         )
         return [row["law_id"] for row in cursor.fetchall()]
+
+    def get_laws_with_status(self, status: str, limit: int = 1000) -> list[tuple[LawRecord, EvaluationRecord]]:
+        """Get laws with their latest evaluation for a given status.
+
+        Returns list of (LawRecord, EvaluationRecord) tuples.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT l.*, e.id as eval_id, e.law_hash as eval_law_hash, e.status,
+                   e.reason_code, e.case_set_id, e.cases_attempted, e.cases_used,
+                   e.power_metrics_json, e.vacuity_json, e.harness_config_hash,
+                   e.sim_hash, e.runtime_ms, e.created_at as eval_created_at
+            FROM laws l
+            INNER JOIN evaluations e ON l.law_id = e.law_id
+            INNER JOIN (
+                SELECT law_id, MAX(created_at) as max_created
+                FROM evaluations
+                GROUP BY law_id
+            ) latest ON e.law_id = latest.law_id AND e.created_at = latest.max_created
+            WHERE e.status = ?
+            ORDER BY e.created_at DESC
+            LIMIT ?
+            """,
+            (status, limit),
+        )
+        results = []
+        for row in cursor.fetchall():
+            law = LawRecord(
+                id=row["id"],
+                law_id=row["law_id"],
+                law_hash=row["law_hash"],
+                template=row["template"],
+                law_json=row["law_json"],
+                created_at=row["created_at"],
+            )
+            evaluation = EvaluationRecord(
+                id=row["eval_id"],
+                law_id=row["law_id"],
+                law_hash=row["eval_law_hash"],
+                status=row["status"],
+                reason_code=row["reason_code"],
+                case_set_id=row["case_set_id"],
+                cases_attempted=row["cases_attempted"],
+                cases_used=row["cases_used"],
+                power_metrics_json=row["power_metrics_json"],
+                vacuity_json=row["vacuity_json"],
+                harness_config_hash=row["harness_config_hash"],
+                sim_hash=row["sim_hash"],
+                runtime_ms=row["runtime_ms"],
+                created_at=row["eval_created_at"],
+            )
+            results.append((law, evaluation))
+        return results
+
+    def law_exists(self, law_hash: str) -> bool:
+        """Check if a law with the given content hash already exists."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT 1 FROM laws WHERE law_hash = ? LIMIT 1", (law_hash,))
+        return cursor.fetchone() is not None
+
+    def upsert_law(self, law: LawRecord) -> int:
+        """Insert or update a law record. Returns the ID."""
+        cursor = self.conn.cursor()
+        # Try to get existing law
+        cursor.execute("SELECT id FROM laws WHERE law_id = ?", (law.law_id,))
+        row = cursor.fetchone()
+        if row:
+            # Update existing
+            cursor.execute(
+                """
+                UPDATE laws SET law_hash = ?, template = ?, law_json = ?
+                WHERE law_id = ?
+                """,
+                (law.law_hash, law.template, law.law_json, law.law_id),
+            )
+            self.conn.commit()
+            return row["id"]
+        else:
+            # Insert new
+            return self.insert_law(law)
+
+    # --- Escalation operations ---
+
+    def insert_escalation_run(self, run: EscalationRunRecord) -> int:
+        """Insert a new escalation run. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO escalation_runs (
+                level, harness_config_hash, sim_hash, seed,
+                laws_tested, stable_count, revoked_count, downgraded_count, runtime_ms
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run.level,
+                run.harness_config_hash,
+                run.sim_hash,
+                run.seed,
+                run.laws_tested,
+                run.stable_count,
+                run.revoked_count,
+                run.downgraded_count,
+                run.runtime_ms,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def update_escalation_run(
+        self,
+        run_id: int,
+        laws_tested: int | None = None,
+        stable_count: int | None = None,
+        revoked_count: int | None = None,
+        downgraded_count: int | None = None,
+        runtime_ms: int | None = None,
+    ) -> None:
+        """Update an escalation run's counts."""
+        cursor = self.conn.cursor()
+        updates = []
+        params: list[Any] = []
+
+        if laws_tested is not None:
+            updates.append("laws_tested = ?")
+            params.append(laws_tested)
+        if stable_count is not None:
+            updates.append("stable_count = ?")
+            params.append(stable_count)
+        if revoked_count is not None:
+            updates.append("revoked_count = ?")
+            params.append(revoked_count)
+        if downgraded_count is not None:
+            updates.append("downgraded_count = ?")
+            params.append(downgraded_count)
+        if runtime_ms is not None:
+            updates.append("runtime_ms = ?")
+            params.append(runtime_ms)
+
+        if not updates:
+            return
+
+        params.append(run_id)
+        cursor.execute(
+            f"UPDATE escalation_runs SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        self.conn.commit()
+
+    def get_escalation_run(self, run_id: int) -> EscalationRunRecord | None:
+        """Get an escalation run by ID."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM escalation_runs WHERE id = ?", (run_id,))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_escalation_run(row)
+
+    def list_escalation_runs(
+        self, level: str | None = None, limit: int = 50
+    ) -> list[EscalationRunRecord]:
+        """List escalation runs, optionally filtered by level."""
+        cursor = self.conn.cursor()
+        if level:
+            cursor.execute(
+                "SELECT * FROM escalation_runs WHERE level = ? ORDER BY created_at DESC LIMIT ?",
+                (level, limit),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM escalation_runs ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+        return [self._row_to_escalation_run(row) for row in cursor.fetchall()]
+
+    def _row_to_escalation_run(self, row: sqlite3.Row) -> EscalationRunRecord:
+        return EscalationRunRecord(
+            id=row["id"],
+            level=row["level"],
+            harness_config_hash=row["harness_config_hash"],
+            sim_hash=row["sim_hash"],
+            seed=row["seed"],
+            laws_tested=row["laws_tested"],
+            stable_count=row["stable_count"],
+            revoked_count=row["revoked_count"],
+            downgraded_count=row["downgraded_count"],
+            runtime_ms=row["runtime_ms"],
+            created_at=row["created_at"],
+        )
+
+    def insert_law_retest(self, retest: LawRetestRecord) -> int:
+        """Insert a new law retest record. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO law_retests (
+                escalation_run_id, law_id, old_status, new_status,
+                flip_type, evaluation_id, counterexample_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                retest.escalation_run_id,
+                retest.law_id,
+                retest.old_status,
+                retest.new_status,
+                retest.flip_type,
+                retest.evaluation_id,
+                retest.counterexample_id,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_retests_for_run(self, run_id: int) -> list[LawRetestRecord]:
+        """Get all law retests for an escalation run."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM law_retests WHERE escalation_run_id = ? ORDER BY id",
+            (run_id,),
+        )
+        return [self._row_to_law_retest(row) for row in cursor.fetchall()]
+
+    def get_retests_by_flip_type(
+        self, flip_type: str, limit: int = 100
+    ) -> list[tuple[LawRetestRecord, LawRecord]]:
+        """Get law retests by flip type with their law records."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT r.*, l.id as law_db_id, l.law_hash, l.template, l.law_json,
+                   l.created_at as law_created_at
+            FROM law_retests r
+            INNER JOIN laws l ON r.law_id = l.law_id
+            WHERE r.flip_type = ?
+            ORDER BY r.created_at DESC
+            LIMIT ?
+            """,
+            (flip_type, limit),
+        )
+        results = []
+        for row in cursor.fetchall():
+            retest = self._row_to_law_retest(row)
+            law = LawRecord(
+                id=row["law_db_id"],
+                law_id=row["law_id"],
+                law_hash=row["law_hash"],
+                template=row["template"],
+                law_json=row["law_json"],
+                created_at=row["law_created_at"],
+            )
+            results.append((retest, law))
+        return results
+
+    def _row_to_law_retest(self, row: sqlite3.Row) -> LawRetestRecord:
+        return LawRetestRecord(
+            id=row["id"],
+            escalation_run_id=row["escalation_run_id"],
+            law_id=row["law_id"],
+            old_status=row["old_status"],
+            new_status=row["new_status"],
+            flip_type=row["flip_type"],
+            evaluation_id=row["evaluation_id"],
+            counterexample_id=row["counterexample_id"],
+            created_at=row["created_at"],
+        )
+
+    def get_laws_needing_escalation(
+        self, level: str, limit: int = 1000
+    ) -> list[tuple[LawRecord, EvaluationRecord]]:
+        """Get accepted laws that haven't been tested at the given escalation level.
+
+        Returns laws whose latest evaluation is PASS and that have no retest
+        record at the specified escalation level.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT l.*, e.id as eval_id, e.law_hash as eval_law_hash, e.status,
+                   e.reason_code, e.case_set_id, e.cases_attempted, e.cases_used,
+                   e.power_metrics_json, e.vacuity_json, e.harness_config_hash,
+                   e.sim_hash, e.runtime_ms, e.created_at as eval_created_at
+            FROM laws l
+            INNER JOIN evaluations e ON l.law_id = e.law_id
+            INNER JOIN (
+                SELECT law_id, MAX(created_at) as max_created
+                FROM evaluations
+                GROUP BY law_id
+            ) latest ON e.law_id = latest.law_id AND e.created_at = latest.max_created
+            WHERE e.status = 'PASS'
+            AND NOT EXISTS (
+                SELECT 1 FROM law_retests r
+                INNER JOIN escalation_runs er ON r.escalation_run_id = er.id
+                WHERE r.law_id = l.law_id AND er.level = ?
+            )
+            ORDER BY e.created_at DESC
+            LIMIT ?
+            """,
+            (level, limit),
+        )
+        results = []
+        for row in cursor.fetchall():
+            law = LawRecord(
+                id=row["id"],
+                law_id=row["law_id"],
+                law_hash=row["law_hash"],
+                template=row["template"],
+                law_json=row["law_json"],
+                created_at=row["created_at"],
+            )
+            evaluation = EvaluationRecord(
+                id=row["eval_id"],
+                law_id=row["law_id"],
+                law_hash=row["eval_law_hash"],
+                status=row["status"],
+                reason_code=row["reason_code"],
+                case_set_id=row["case_set_id"],
+                cases_attempted=row["cases_attempted"],
+                cases_used=row["cases_used"],
+                power_metrics_json=row["power_metrics_json"],
+                vacuity_json=row["vacuity_json"],
+                harness_config_hash=row["harness_config_hash"],
+                sim_hash=row["sim_hash"],
+                runtime_ms=row["runtime_ms"],
+                created_at=row["eval_created_at"],
+            )
+            results.append((law, evaluation))
+        return results
