@@ -82,9 +82,21 @@ def left_component(state: State) -> int:
 def particle_count(state: State) -> int:
     """Total particle count: count('>') + count('<') + 2*count('X').
 
-    This is a conserved quantity.
+    This is a conserved quantity. Each X contains 2 particles (one > and one <).
+    Also known as: TotalParticles
     """
     return count_right(state) + count_left(state) + 2 * count_collision(state)
+
+
+def free_movers(state: State) -> int:
+    """Count free (non-colliding) movers: count('>') + count('<').
+
+    This is NOT conserved - it decreases when particles collide (form X)
+    and increases when collisions resolve.
+
+    Also known as: FreeMovers
+    """
+    return count_right(state) + count_left(state)
 
 
 def momentum(state: State) -> int:
@@ -243,3 +255,190 @@ def evaluate_observable(name: str, state: State, **kwargs) -> int:
 
     else:
         raise ValueError(f"Unknown observable: {name}")
+
+
+# =============================================================================
+# CANONICAL OBSERVABLES REGISTRY
+# =============================================================================
+# This registry defines the standard observable names and their semantics.
+# Using these canonical names ensures consistency and helps the linter
+# catch semantic errors.
+#
+# CONSERVATION KEY:
+#   [C] = Conserved (invariant under evolution)
+#   [~] = Not conserved (changes during collisions)
+# =============================================================================
+
+from dataclasses import dataclass
+from enum import Enum
+
+
+class ConservationStatus(str, Enum):
+    """Whether a quantity is conserved under time evolution."""
+    CONSERVED = "conserved"
+    NOT_CONSERVED = "not_conserved"
+    CONDITIONAL = "conditional"  # Conserved under certain conditions
+
+
+@dataclass
+class CanonicalObservable:
+    """A canonical observable with documented semantics."""
+    name: str
+    expression: str
+    description: str
+    conservation: ConservationStatus
+    quantity_type: str  # from QuantityType enum
+    notes: str = ""
+
+
+CANONICAL_OBSERVABLES: dict[str, CanonicalObservable] = {
+    # === CONSERVED QUANTITIES ===
+    "TotalParticles": CanonicalObservable(
+        name="TotalParticles",
+        expression="count('>') + count('<') + 2*count('X')",
+        description="Total number of particles (X contains 2 particles)",
+        conservation=ConservationStatus.CONSERVED,
+        quantity_type="particle_count",
+        notes="Each X is a collision of one > and one <, so counts as 2",
+    ),
+    "RightComponent": CanonicalObservable(
+        name="RightComponent",
+        expression="count('>') + count('X')",
+        description="Right-moving component count",
+        conservation=ConservationStatus.CONSERVED,
+        quantity_type="component_count",
+        notes="The number of right-moving particles, including those in collision",
+    ),
+    "LeftComponent": CanonicalObservable(
+        name="LeftComponent",
+        expression="count('<') + count('X')",
+        description="Left-moving component count",
+        conservation=ConservationStatus.CONSERVED,
+        quantity_type="component_count",
+        notes="The number of left-moving particles, including those in collision",
+    ),
+    "Momentum": CanonicalObservable(
+        name="Momentum",
+        expression="count('>') - count('<')",
+        description="Net momentum (right - left)",
+        conservation=ConservationStatus.CONSERVED,
+        quantity_type="momentum_like",
+        notes="Equivalent to RightComponent - LeftComponent",
+    ),
+    "GridLength": CanonicalObservable(
+        name="GridLength",
+        expression="grid_length",
+        description="Length of the state string",
+        conservation=ConservationStatus.CONSERVED,
+        quantity_type="length",
+    ),
+
+    # === NOT CONSERVED QUANTITIES ===
+    "FreeMovers": CanonicalObservable(
+        name="FreeMovers",
+        expression="count('>') + count('<')",
+        description="Free (non-colliding) movers",
+        conservation=ConservationStatus.NOT_CONSERVED,
+        quantity_type="cell_count",
+        notes="Decreases when particles collide, increases when collisions resolve",
+    ),
+    "OccupiedCells": CanonicalObservable(
+        name="OccupiedCells",
+        expression="count('>') + count('<') + count('X')",
+        description="Number of non-empty cells",
+        conservation=ConservationStatus.NOT_CONSERVED,
+        quantity_type="cell_count",
+        notes="Changes during collisions: 2 cells (><) become 1 cell (X)",
+    ),
+    "EmptyCells": CanonicalObservable(
+        name="EmptyCells",
+        expression="count('.')",
+        description="Number of empty cells",
+        conservation=ConservationStatus.NOT_CONSERVED,
+        quantity_type="cell_count",
+        notes="Changes during collisions",
+    ),
+    "CollisionCells": CanonicalObservable(
+        name="CollisionCells",
+        expression="count('X')",
+        description="Number of cells with active collisions",
+        conservation=ConservationStatus.NOT_CONSERVED,
+        quantity_type="cell_count",
+        notes="X cells resolve in the next time step",
+    ),
+
+    # === CONDITIONALLY CONSERVED ===
+    "RightMovers": CanonicalObservable(
+        name="RightMovers",
+        expression="count('>')",
+        description="Count of free right-moving particles",
+        conservation=ConservationStatus.CONDITIONAL,
+        quantity_type="component_count",
+        notes="Conserved only if no collisions occur",
+    ),
+    "LeftMovers": CanonicalObservable(
+        name="LeftMovers",
+        expression="count('<')",
+        description="Count of free left-moving particles",
+        conservation=ConservationStatus.CONDITIONAL,
+        quantity_type="component_count",
+        notes="Conserved only if no collisions occur",
+    ),
+}
+
+
+# Mapping from common "Movers" expressions to canonical names
+# Use this to suggest fixes when linting
+EXPRESSION_TO_CANONICAL: dict[str, str] = {
+    "count('>') + count('<')": "FreeMovers",
+    "count('>') + count('<') + count('X')": "OccupiedCells",
+    "count('>') + count('<') + 2*count('X')": "TotalParticles",
+    "count('>') + count('X')": "RightComponent",
+    "count('<') + count('X')": "LeftComponent",
+    "count('>') - count('<')": "Momentum",
+    "count('.')": "EmptyCells",
+    "count('X')": "CollisionCells",
+    "count('>')": "RightMovers",
+    "count('<')": "LeftMovers",
+    "grid_length": "GridLength",
+}
+
+
+def get_canonical_name(expression: str) -> str | None:
+    """Get the canonical name for an expression, if one exists.
+
+    Args:
+        expression: The expression string
+
+    Returns:
+        Canonical name or None if not a standard expression
+    """
+    # Normalize expression: remove all spaces
+    normalized = expression.replace(" ", "")
+
+    # Try direct lookup
+    if normalized in EXPRESSION_TO_CANONICAL:
+        return EXPRESSION_TO_CANONICAL[normalized]
+
+    # Try with normalized keys (remove spaces from canonical expressions too)
+    for key, name in EXPRESSION_TO_CANONICAL.items():
+        if key.replace(" ", "") == normalized:
+            return name
+
+    return None
+
+
+def suggest_canonical_observable(observable_name: str, expression: str) -> str | None:
+    """Suggest a canonical observable name if the expression matches a known pattern.
+
+    Args:
+        observable_name: Current name given to the observable
+        expression: The expression defining the observable
+
+    Returns:
+        Suggested canonical name, or None if no suggestion
+    """
+    canonical = get_canonical_name(expression)
+    if canonical and canonical.lower() != observable_name.lower():
+        return canonical
+    return None

@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any
 
 from src.harness.power import PowerMetrics
-from src.harness.vacuity import VacuityReport
+from src.claims.vacuity import VacuityReport
 
 
 class ReasonCode(str, Enum):

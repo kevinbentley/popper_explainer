@@ -35,6 +35,63 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+class LLMExchangeLogger:
+    """Saves LLM prompt/response exchanges to individual files.
+
+    Each exchange is saved to a separate JSON file to avoid concurrency issues
+    when running in parallel mode.
+    """
+
+    def __init__(self, exchanges_dir: Path):
+        self.exchanges_dir = exchanges_dir
+        self.exchanges_dir.mkdir(parents=True, exist_ok=True)
+        self._counter = 0
+        self._lock = threading.Lock()
+
+    def save_exchange(
+        self,
+        exchange: dict[str, str],
+        worker_id: int | None = None,
+        iteration: int | None = None,
+        metadata: dict | None = None,
+    ) -> Path:
+        """Save an LLM exchange to a file.
+
+        Args:
+            exchange: Dict with system_instruction, prompt, response
+            worker_id: Worker ID for parallel mode
+            iteration: Discovery iteration number
+            metadata: Additional metadata (laws proposed, etc.)
+
+        Returns:
+            Path to the saved file
+        """
+        with self._lock:
+            self._counter += 1
+            counter = self._counter
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        worker_suffix = f"_w{worker_id}" if worker_id is not None else ""
+        iter_suffix = f"_i{iteration}" if iteration is not None else ""
+        filename = f"exchange_{timestamp}{worker_suffix}{iter_suffix}_{counter:04d}.json"
+        filepath = self.exchanges_dir / filename
+
+        data = {
+            "timestamp": datetime.now().isoformat(),
+            "worker_id": worker_id,
+            "iteration": iteration,
+            "system_instruction": exchange.get("system_instruction", ""),
+            "prompt": exchange.get("prompt", ""),
+            "response": exchange.get("response", ""),
+            "metadata": metadata or {},
+        }
+
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=2)
+
+        return filepath
+
+
 class TranscriptLogger:
     """Logs all output to both console and transcript file. Thread-safe."""
 
@@ -342,6 +399,7 @@ def discovery_worker(
     verbose: bool = False,
     enable_escalation: bool = True,
     escalation_config: EscalationPolicyConfig | None = None,
+    exchange_logger: LLMExchangeLogger | None = None,
 ) -> None:
     """Run discovery cycles in a worker thread.
 
@@ -359,6 +417,7 @@ def discovery_worker(
         shared_state: Thread-safe shared state
         logger: Thread-safe logger
         verbose: Whether to log verbose output
+        exchange_logger: Optional logger for saving LLM exchanges to files
     """
     # Each worker gets its own components
     client = create_client()
@@ -430,6 +489,22 @@ def discovery_worker(
                 except Exception as e:
                     logger.log(f"Proposal error: {e}", worker_id=worker_id)
                     continue
+
+                # Save LLM exchange to file when verbose mode is enabled
+                if verbose and exchange_logger:
+                    exchange = proposer.get_last_exchange()
+                    exchange_file = exchange_logger.save_exchange(
+                        exchange,
+                        worker_id=worker_id,
+                        iteration=iteration,
+                        metadata={
+                            "laws_proposed": len(batch.laws),
+                            "laws_rejected": len(batch.rejections),
+                            "laws_redundant": len(batch.redundant),
+                            "law_ids": [law.law_id for law in batch.laws],
+                        },
+                    )
+                    logger.log(f"LLM exchange saved to: {exchange_file.name}", worker_id=worker_id)
 
                 logger.log(f"Proposed: {len(batch.laws)}, Rejected: {len(batch.rejections)}, Redundant: {len(batch.redundant)}", worker_id=worker_id)
 
@@ -582,6 +657,12 @@ def run_discovery_parallel(
     # Create shared state
     shared_state = SharedDiscoveryState(max_iterations=iterations)
 
+    # Create exchange logger for verbose mode (saves LLM interactions to files)
+    exchange_logger: LLMExchangeLogger | None = None
+    if verbose:
+        exchanges_dir = output_dir / f"llm_exchanges_{timestamp}"
+        exchange_logger = LLMExchangeLogger(exchanges_dir)
+
     with TranscriptLogger(transcript_path) as logger:
         logger.log("=" * 60)
         logger.log("PARALLEL POPPERIAN LAW DISCOVERY")
@@ -591,6 +672,9 @@ def run_discovery_parallel(
         logger.log(f"Laws per iteration: {laws_per_iteration}")
         logger.log(f"Workers: {workers}")
         logger.log(f"Database: {db_path}")
+        logger.log(f"Verbose: {verbose}")
+        if verbose:
+            logger.log(f"  LLM exchanges dir: {exchanges_dir}")
         logger.log(f"Escalation: {'enabled' if enable_escalation else 'disabled'}")
         if enable_escalation:
             logger.log(f"  Trigger: {escalation_config.min_accepted_laws} laws")
@@ -621,6 +705,7 @@ def run_discovery_parallel(
                     verbose=verbose,
                     enable_escalation=enable_escalation,
                     escalation_config=escalation_config,
+                    exchange_logger=exchange_logger,
                 )
                 for i in range(workers)
             ]
@@ -697,6 +782,8 @@ def run_discovery_parallel(
 
         logger.log(f"\nResults saved to: {output_file}")
         logger.log(f"Transcript saved to: {transcript_path}")
+        if verbose and exchange_logger:
+            logger.log(f"LLM exchanges saved to: {exchange_logger.exchanges_dir}")
 
     return stats
 
@@ -753,13 +840,19 @@ def run_discovery(
 
     untestable_path = output_dir / "untestable_laws.jsonl"
 
+    # Create exchange logger for verbose mode
+    exchange_logger: LLMExchangeLogger | None = None
+    if verbose:
+        exchanges_dir = output_dir / f"llm_exchanges_{timestamp}"
+        exchange_logger = LLMExchangeLogger(exchanges_dir)
+
     with TranscriptLogger(transcript_path) as logger:
         with UntestableLawsLog(untestable_path) as untestable_log:
             with DiscoveryPersistence(db_path) as persistence:
                 return _run_discovery_with_logging(
                     iterations, laws_per_iteration, output_dir, timestamp,
                     logger, verbose, untestable_log, persistence,
-                    enable_escalation, escalation_config
+                    enable_escalation, escalation_config, exchange_logger
                 )
 
 
@@ -774,6 +867,7 @@ def _run_discovery_with_logging(
     persistence: DiscoveryPersistence | None = None,
     enable_escalation: bool = True,
     escalation_config: EscalationPolicyConfig | None = None,
+    exchange_logger: LLMExchangeLogger | None = None,
 ) -> dict:
     """Run discovery with transcript logging."""
     # Initialize escalation config early so we can log its values
@@ -787,6 +881,8 @@ def _run_discovery_with_logging(
     logger.log(f"Iterations: {iterations}")
     logger.log(f"Laws per iteration: {laws_per_iteration}")
     logger.log(f"Verbose: {verbose}")
+    if verbose and exchange_logger:
+        logger.log(f"  LLM exchanges dir: {exchange_logger.exchanges_dir}")
     if persistence:
         logger.log(f"Database: {persistence.db_path}")
     logger.log(f"Escalation: {'enabled' if enable_escalation else 'disabled'}")
@@ -920,9 +1016,25 @@ def _run_discovery_with_logging(
             logger.log_json("PROPOSAL ERROR", {"error": str(e), "traceback": traceback.format_exc()})
             continue
 
-        # Verbose output: show full prompt and response
+        # Verbose output: show full prompt and response, and save to file
         if verbose:
             exchange = proposer.get_last_exchange()
+
+            # Save exchange to file for later analysis
+            if exchange_logger:
+                exchange_file = exchange_logger.save_exchange(
+                    exchange,
+                    iteration=iteration,
+                    metadata={
+                        "laws_proposed": len(batch.laws),
+                        "laws_rejected": len(batch.rejections),
+                        "laws_redundant": len(batch.redundant),
+                        "law_ids": [law.law_id for law in batch.laws],
+                    },
+                )
+                logger.log(f"\n    LLM exchange saved to: {exchange_file.name}")
+
+            # Also print to transcript
             logger.log("\n" + "=" * 40)
             logger.log("SYSTEM INSTRUCTION:")
             logger.log("=" * 40)
@@ -1186,6 +1298,9 @@ def _run_discovery_with_logging(
     if untestable_log and untestable_log.count > 0:
         logger.log(f"Untestable laws logged to: {untestable_log.log_path} ({untestable_log.count} entries)")
 
+    if verbose and exchange_logger:
+        logger.log(f"LLM exchanges saved to: {exchange_logger.exchanges_dir}")
+
     # Show database summary if using persistence
     if persistence:
         db_summary = persistence.get_summary()
@@ -1220,7 +1335,7 @@ def main():
     parser.add_argument(
         "--verbose", "-v",
         action="store_true",
-        help="Print full prompts and LLM responses",
+        help="Save LLM prompts/responses to files (in llm_exchanges_* directory)",
     )
     parser.add_argument(
         "--db", "-d",

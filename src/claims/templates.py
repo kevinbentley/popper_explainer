@@ -32,13 +32,7 @@ class Violation:
     message: str = ""  # Human-readable description
 
 
-@dataclass
-class VacuityReport:
-    """Report on vacuity of implication/eventually tests."""
-
-    antecedent_true_count: int = 0  # How often P was true
-    consequent_evaluated_count: int = 0  # How often Q was evaluated
-    is_vacuous: bool = False  # True if antecedent was never true
+from src.claims.vacuity import VacuityReport
 
 
 @dataclass
@@ -191,6 +185,7 @@ class ImplicationStepChecker(TemplateChecker):
             return CheckResult(passed=True)
 
         vacuity = VacuityReport()
+        vacuity.total_checks = len(trajectory) - 1  # Step checks
 
         for t in range(len(trajectory) - 1):
             if self.antecedent(trajectory[t]):
@@ -222,6 +217,7 @@ class ImplicationStateChecker(TemplateChecker):
 
     def check(self, trajectory: Trajectory) -> CheckResult:
         vacuity = VacuityReport()
+        vacuity.total_checks = len(trajectory)  # State checks
 
         for t, state in enumerate(trajectory):
             if self.antecedent(state):
@@ -255,6 +251,7 @@ class EventuallyChecker(TemplateChecker):
 
     def check(self, trajectory: Trajectory) -> CheckResult:
         vacuity = VacuityReport()
+        vacuity.total_checks = len(trajectory)  # Each timestep is a potential trigger point
 
         for t0, state in enumerate(trajectory):
             if self.antecedent(state):
@@ -288,22 +285,44 @@ class EventuallyChecker(TemplateChecker):
 class SymmetryCommutationChecker(TemplateChecker):
     """Checker for symmetry_commutation: evolve(T(S), t) == T(evolve(S, t))."""
 
-    def __init__(self, transform_name: str, time_horizon: int):
+    def __init__(self, transform_name: str, time_horizon: int, shift_k_value: int | None = None):
+        """Initialize the symmetry checker.
+
+        Args:
+            transform_name: Name of the transform to test
+            time_horizon: Number of timesteps to evolve
+            shift_k_value: For shift_k transform, the k value to use.
+                           If None and transform is shift_k, defaults to 1.
+                           Can be overridden per-check via check() metadata.
+        """
         self.transform_name = transform_name
         self.time_horizon = time_horizon
         self._raw_transform = get_transform(transform_name)
         if self._raw_transform is None:
             raise ValueError(f"Unknown transform: {transform_name}")
 
+        # Store default k value for shift_k
+        self._default_k = shift_k_value if shift_k_value is not None else 1
+
         # Handle transforms that need extra arguments (e.g., shift_k needs k)
         if transform_name == "shift_k":
-            # Create a wrapper that uses k=1 (shift by 1 position)
-            self._transform = lambda state: self._raw_transform(state, 1)
+            # Create a wrapper that uses the default k value
+            self._transform = lambda state, k=self._default_k: self._raw_transform(state, k)
         else:
             self._transform = self._raw_transform
 
-    def check(self, trajectory: Trajectory) -> CheckResult:
+    def _get_transform_for_k(self, k: int):
+        """Get a transform function for a specific k value."""
+        if self.transform_name == "shift_k":
+            return lambda state: self._raw_transform(state, k)
+        return self._transform
+
+    def check(self, trajectory: Trajectory, k: int | None = None) -> CheckResult:
         """Check symmetry commutation for the initial state.
+
+        Args:
+            trajectory: List of states (only trajectory[0] is used)
+            k: For shift_k, the shift amount. If None, uses default.
 
         Note: For symmetry tests, we only check the initial state.
         The trajectory is provided for consistency, but we recompute
@@ -314,9 +333,20 @@ class SymmetryCommutationChecker(TemplateChecker):
 
         initial_state = trajectory[0]
 
+        # Get the transform function (possibly with custom k for shift_k)
+        if self.transform_name == "shift_k" and k is not None:
+            transform_fn = self._get_transform_for_k(k)
+        else:
+            # For non-shift_k or when k not specified, use default
+            if self.transform_name == "shift_k":
+                k = self._default_k
+                transform_fn = self._get_transform_for_k(k)
+            else:
+                transform_fn = self._transform
+
         # Path 1: transform then evolve
         try:
-            transformed = self._transform(initial_state)
+            transformed = transform_fn(initial_state)
             path1_trajectory = run(transformed, self.time_horizon)
         except Exception as e:
             return CheckResult(
@@ -331,7 +361,7 @@ class SymmetryCommutationChecker(TemplateChecker):
         # Path 2: evolve then transform
         try:
             path2_trajectory = run(initial_state, self.time_horizon)
-            path2_transformed = [self._transform(s) for s in path2_trajectory]
+            path2_transformed = [transform_fn(s) for s in path2_trajectory]
         except Exception as e:
             return CheckResult(
                 passed=False,
@@ -353,13 +383,109 @@ class SymmetryCommutationChecker(TemplateChecker):
                         details={
                             "transform_then_evolve": path1_trajectory[t],
                             "evolve_then_transform": path2_transformed[t],
+                            "k": k if self.transform_name == "shift_k" else None,
                         },
                         message=f"Symmetry broken at t={t}: "
-                        f"evolve(T(S))={path1_trajectory[t]} != T(evolve(S))={path2_transformed[t]}",
+                        f"evolve(T(S))={path1_trajectory[t]} != T(evolve(S))={path2_transformed[t]}"
+                        f"{f' (k={k})' if self.transform_name == 'shift_k' else ''}",
                     ),
                 )
 
         return CheckResult(passed=True)
+
+
+class LocalTransitionChecker(TemplateChecker):
+    """Checker for local_transition template: ∀t,i: state[i]==P at t → state[i] satisfies Q at t+1.
+
+    This template expresses per-cell (micro-level) behavior, as opposed to
+    aggregate (macro-level) behavior expressed by count-based templates.
+
+    Example: "Each X cell resolves in one step"
+    - trigger_symbol='X', result_op='!=', result_symbol='X'
+    - For each position i where state_t[i]=='X', state_{t+1}[i] != 'X'
+    """
+
+    def __init__(
+        self,
+        trigger_symbol: str,
+        result_op: ComparisonOp,
+        result_symbol: str,
+    ):
+        self.trigger_symbol = trigger_symbol
+        self.result_op = result_op
+        self.result_symbol = result_symbol
+
+    def _check_result(self, cell_value: str) -> bool:
+        """Check if a cell value satisfies the result condition."""
+        if self.result_op == ComparisonOp.EQ:
+            return cell_value == self.result_symbol
+        elif self.result_op == ComparisonOp.NE:
+            return cell_value != self.result_symbol
+        else:
+            raise ValueError(f"Local transition only supports == or != operators, got {self.result_op}")
+
+    def check(self, trajectory: Trajectory) -> CheckResult:
+        if len(trajectory) < 2:
+            return CheckResult(passed=True)
+
+        vacuity = VacuityReport()
+        vacuity.total_checks = len(trajectory) - 1  # Step checks
+
+        for t in range(len(trajectory) - 1):
+            state_t = trajectory[t]
+            state_t1 = trajectory[t + 1]
+
+            # Check each position
+            for i, cell in enumerate(state_t):
+                if cell == self.trigger_symbol:
+                    vacuity.antecedent_true_count += 1
+                    vacuity.consequent_evaluated_count += 1
+
+                    # Check the same position in the next state
+                    if i < len(state_t1):
+                        next_cell = state_t1[i]
+                    else:
+                        # Grid shrunk? Treat as violation or skip
+                        # For now, treat as violation since grid length should be invariant
+                        return CheckResult(
+                            passed=False,
+                            violation=Violation(
+                                t=t,
+                                state=state_t,
+                                details={
+                                    "position": i,
+                                    "trigger_symbol": self.trigger_symbol,
+                                    "error": "grid_shrunk",
+                                },
+                                message=f"Grid shrunk: position {i} doesn't exist at t={t+1}",
+                            ),
+                            vacuity=vacuity,
+                        )
+
+                    if not self._check_result(next_cell):
+                        return CheckResult(
+                            passed=False,
+                            violation=Violation(
+                                t=t,
+                                state=state_t,
+                                details={
+                                    "position": i,
+                                    "trigger_symbol": self.trigger_symbol,
+                                    "expected_op": self.result_op.value,
+                                    "expected_symbol": self.result_symbol,
+                                    "actual_symbol": next_cell,
+                                    "state_t": state_t,
+                                    "state_t1": state_t1,
+                                },
+                                message=f"Local transition violated at t={t}, position {i}: "
+                                f"cell was '{self.trigger_symbol}', expected {self.result_op.value} "
+                                f"'{self.result_symbol}' at t+1 but got '{next_cell}'",
+                            ),
+                            vacuity=vacuity,
+                        )
+
+        vacuity.is_vacuous = vacuity.antecedent_true_count == 0
+        return CheckResult(passed=True, vacuity=vacuity)
 
 
 # Type alias for the unified checker interface

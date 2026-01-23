@@ -23,7 +23,7 @@ from src.harness.evaluator import Evaluator, compute_density, has_collision, has
 from src.harness.generators import GeneratorRegistry
 from src.harness.minimizer import Minimizer
 from src.harness.power import PowerMetrics
-from src.harness.vacuity import VacuityReport
+from src.claims.vacuity import VacuityReport
 from src.harness.verdict import Counterexample, LawVerdict, ReasonCode
 from src.universe.simulator import version_hash as sim_version_hash
 from src.universe.transforms import list_transforms
@@ -381,18 +381,47 @@ class Harness:
                 ],
             )
 
-        # Check for vacuous pass
-        if self.config.require_non_vacuous and vacuity.is_vacuous:
-            return LawVerdict(
-                law_id=law.law_id,
-                status="UNKNOWN",
-                reason_code=ReasonCode.VACUOUS_PASS,
-                power_metrics=power_metrics,
-                vacuity=vacuity,
-                runtime_ms=runtime_ms,
-                tests_run=tests_run,
-                notes=["Test was vacuous: antecedent never held"],
-            )
+        # Check for vacuous pass (implication/eventually templates)
+        is_implication_template = law.template in (
+            Template.IMPLICATION_STEP,
+            Template.IMPLICATION_STATE,
+            Template.EVENTUALLY,
+            Template.LOCAL_TRANSITION,
+        )
+
+        if is_implication_template and self.config.require_non_vacuous:
+            # Check if antecedent was never true (completely vacuous)
+            if vacuity.is_vacuous:
+                return LawVerdict(
+                    law_id=law.law_id,
+                    status="UNKNOWN",
+                    reason_code=ReasonCode.VACUOUS_PASS,
+                    power_metrics=power_metrics,
+                    vacuity=vacuity,
+                    runtime_ms=runtime_ms,
+                    tests_run=tests_run,
+                    notes=[
+                        "Test was vacuous: antecedent never held",
+                        f"Total checks: {vacuity.total_checks}, antecedent hits: {vacuity.antecedent_true_count}",
+                    ],
+                )
+
+            # Check if antecedent triggered too few times (low power)
+            if vacuity.antecedent_true_count < self.config.min_antecedent_triggers:
+                return LawVerdict(
+                    law_id=law.law_id,
+                    status="UNKNOWN",
+                    reason_code=ReasonCode.INCONCLUSIVE_LOW_POWER,
+                    power_metrics=power_metrics,
+                    vacuity=vacuity,
+                    runtime_ms=runtime_ms,
+                    tests_run=tests_run,
+                    notes=[
+                        f"Insufficient antecedent coverage: {vacuity.antecedent_true_count} triggers "
+                        f"(need {self.config.min_antecedent_triggers})",
+                        "Consider adding targeted test cases that satisfy the antecedent",
+                    ],
+                )
 
         # Check for low power
         if power_metrics.coverage_score < 0.3:
@@ -407,6 +436,24 @@ class Harness:
                 notes=[f"Low coverage score: {power_metrics.coverage_score:.2f}"],
             )
 
+        # For shift_k symmetry laws, verify diverse k coverage
+        if law.template == Template.SYMMETRY_COMMUTATION and law.transform == "shift_k":
+            k_coverage = self._check_shift_k_coverage(results)
+            if not k_coverage["sufficient"]:
+                return LawVerdict(
+                    law_id=law.law_id,
+                    status="UNKNOWN",
+                    reason_code=ReasonCode.INCONCLUSIVE_LOW_POWER,
+                    power_metrics=power_metrics,
+                    vacuity=vacuity,
+                    runtime_ms=runtime_ms,
+                    tests_run=tests_run,
+                    notes=[
+                        f"Insufficient shift_k diversity: {k_coverage['message']}",
+                        f"k values tested: {k_coverage['k_values_per_length']}",
+                    ],
+                )
+
         # PASS: no counterexample found with sufficient coverage
         return LawVerdict(
             law_id=law.law_id,
@@ -416,6 +463,75 @@ class Harness:
             runtime_ms=runtime_ms,
             tests_run=tests_run,
         )
+
+    def _check_shift_k_coverage(
+        self, results: list[CaseResult]
+    ) -> dict[str, Any]:
+        """Check if shift_k symmetry tests have sufficient k diversity.
+
+        Requirements for PASS:
+        - k values must be in {1..L-1} (not 0 or L, which are identity)
+        - At least 2 different k values per grid length L
+        - At least one k value tested per grid length
+
+        Returns:
+            Dict with 'sufficient' (bool), 'message' (str), and 'k_values_per_length'
+        """
+        # Collect k values by grid length
+        k_values_per_length: dict[int, set[int]] = {}
+
+        for result in results:
+            if not result.precondition_met:
+                continue
+
+            case = result.case
+            if case.metadata and "k" in case.metadata:
+                k = case.metadata["k"]
+                L = case.config.grid_length if case.config else len(case.initial_state)
+
+                if L not in k_values_per_length:
+                    k_values_per_length[L] = set()
+                k_values_per_length[L].add(k)
+
+        # Check requirements
+        if not k_values_per_length:
+            return {
+                "sufficient": False,
+                "message": "No shift_k cases with k metadata found",
+                "k_values_per_length": {},
+            }
+
+        issues = []
+        min_k_per_length = 2  # Require at least 2 distinct k values
+
+        for L, k_values in k_values_per_length.items():
+            # Check for identity shifts
+            invalid_k = [k for k in k_values if k == 0 or k == L]
+            if invalid_k:
+                issues.append(f"L={L}: used identity k values {invalid_k}")
+
+            # Check for diversity
+            valid_k = [k for k in k_values if k != 0 and k != L]
+            if len(valid_k) < min_k_per_length:
+                issues.append(
+                    f"L={L}: only {len(valid_k)} valid k values (need {min_k_per_length})"
+                )
+
+        # Convert to serializable format
+        k_values_str = {L: sorted(list(ks)) for L, ks in k_values_per_length.items()}
+
+        if issues:
+            return {
+                "sufficient": False,
+                "message": "; ".join(issues),
+                "k_values_per_length": k_values_str,
+            }
+
+        return {
+            "sufficient": True,
+            "message": "Sufficient k diversity",
+            "k_values_per_length": k_values_str,
+        }
 
     def _persist_evaluation(
         self,

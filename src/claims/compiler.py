@@ -23,6 +23,7 @@ from src.claims.templates import (
     ImplicationStateChecker,
     ImplicationStepChecker,
     InvariantChecker,
+    LocalTransitionChecker,
     MonotoneChecker,
     SymmetryCommutationChecker,
     TemplateChecker,
@@ -82,6 +83,8 @@ class ClaimCompiler:
             return self._compile_eventually(law)
         elif law.template == Template.SYMMETRY_COMMUTATION:
             return self._compile_symmetry(law)
+        elif law.template == Template.LOCAL_TRANSITION:
+            return self._compile_local_transition(law)
         else:
             raise CompilationError(f"Unknown template: {law.template}")
 
@@ -174,6 +177,36 @@ class ClaimCompiler:
             )
 
         return SymmetryCommutationChecker(law.transform, law.quantifiers.T)
+
+    def _compile_local_transition(self, law: CandidateLaw) -> LocalTransitionChecker:
+        """Compile a local_transition law.
+
+        Local transition expresses per-cell behavior:
+        ∀t,i: state[i] == trigger_symbol at t → state[i] result_op result_symbol at t+1
+
+        Example: "Each X cell resolves in one step"
+        - trigger_symbol='X', result_op='!=', result_symbol='X'
+        """
+        if law.trigger_symbol is None:
+            raise CompilationError("Local_transition requires 'trigger_symbol' field")
+
+        if law.result_op is None:
+            raise CompilationError("Local_transition requires 'result_op' field")
+
+        if law.result_symbol is None:
+            raise CompilationError("Local_transition requires 'result_symbol' field")
+
+        # Validate that result_op is == or !=
+        if law.result_op not in (ComparisonOp.EQ, ComparisonOp.NE):
+            raise CompilationError(
+                f"Local_transition result_op must be '==' or '!=', got '{law.result_op.value}'"
+            )
+
+        return LocalTransitionChecker(
+            trigger_symbol=law.trigger_symbol,
+            result_op=law.result_op,
+            result_symbol=law.result_symbol,
+        )
 
     def _parse_implication_claim(
         self, law: CandidateLaw

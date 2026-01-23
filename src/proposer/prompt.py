@@ -80,20 +80,62 @@ ALLOWED TEMPLATES:
 - eventually: ∀t0: antecedent(t0) → ∃t∈[t0..t0+H]: consequent(t)
 - symmetry_commutation: evolve(Transform(S), T) == Transform(evolve(S, T))
 - bound: ∀t∈[0..T]: claim_ast holds (typically f(t) op k)
+- local_transition: ∀t,i: state[i]==trigger → state[i] satisfies result at t+1 (per-cell rule)
+
+MICRO vs MACRO LAWS - IMPORTANT DISTINCTION:
+Most templates express MACRO (aggregate) laws about global counts: count(X), count(>), etc.
+The local_transition template expresses MICRO (per-cell) laws about individual cell behavior.
+
+Example of the difference:
+- MACRO (FALSE): "If count(X) > 0 then count(X) at t+1 == 0" - FAILS because new X can form
+- MICRO (TRUE): "Each X cell becomes non-X at the same position" - PASSES because individual X resolves
+
+Use local_transition for rules about what happens to individual cells, not aggregate counts.
+
+LOCAL_TRANSITION TEMPLATE:
+- Requires fields: trigger_symbol, result_op (== or !=), result_symbol
+- Expresses: ∀t,i: if state[i] == trigger_symbol at t, then state[i] result_op result_symbol at t+1
+- Example: trigger_symbol="X", result_op="!=", result_symbol="X" means each X cell resolves
 
 OBSERVABLES (defined in "observables" field):
 Define observables using only these primitives:
-- count('>') - right-moving particles
-- count('<') - left-moving particles
-- count('X') - collision cells
+- count('>') - right-moving particles (free, not in collision)
+- count('<') - left-moving particles (free, not in collision)
+- count('X') - collision cells (each X contains one > and one <)
 - count('.') - empty cells
 - grid_length - grid size (constant)
+- leftmost(symbol), rightmost(symbol) - position of first/last occurrence
+- max_gap(symbol) - longest contiguous run of symbol
+- spread(symbol) - rightmost - leftmost position
+- adjacent_pairs(sym1, sym2) - count of sym1 immediately followed by sym2
+
+CANONICAL OBSERVABLES - USE THESE NAMES for semantic clarity:
+
+CONSERVED quantities (invariant under time evolution):
+- TotalParticles:  count('>') + count('<') + 2*count('X')  -- each X contains 2 particles
+- RightComponent:  count('>') + count('X')                 -- right-moving component
+- LeftComponent:   count('<') + count('X')                 -- left-moving component
+- Momentum:        count('>') - count('<')                 -- net momentum
+
+NOT CONSERVED (change during collisions):
+- FreeMovers:      count('>') + count('<')                 -- decreases when colliding
+- OccupiedCells:   count('>') + count('<') + count('X')    -- 2 cells become 1 during collision
+- EmptyCells:      count('.')                              -- changes during collisions
+- CollisionCells:  count('X')                              -- X cells resolve next step
+
+CONDITIONALLY CONSERVED (only if no collisions occur):
+- RightMovers:     count('>')
+- LeftMovers:      count('<')
+
+IMPORTANT: For conservation laws, use TotalParticles, RightComponent, LeftComponent, or Momentum.
+Do NOT use FreeMovers, OccupiedCells, or CollisionCells for conservation laws - they are not conserved!
 
 Example observables:
-- {"name": "R", "expr": "count('>') + count('X')"}  # right component
-- {"name": "L", "expr": "count('<') + count('X')"}  # left component
-- {"name": "N", "expr": "count('>') + count('<') + 2*count('X')"}  # particle count
-- {"name": "P", "expr": "count('>') - count('<')"}  # momentum
+- {"name": "TotalParticles", "expr": "count('>') + count('<') + 2*count('X')"}
+- {"name": "RightComponent", "expr": "count('>') + count('X')"}
+- {"name": "Momentum", "expr": "count('>') - count('<')"}
+- {"name": "FreeMovers", "expr": "count('>') + count('<')"}
+- {"name": "CollisionCells", "expr": "count('X')"}
 
 STRUCTURED CLAIM AST (REQUIRED):
 Claims must be JSON ASTs with these node types:
@@ -131,6 +173,20 @@ EXAMPLES:
 For symmetry_commutation template:
 - Include "transform" field with: "mirror_swap", "shift_k", "mirror_only", "swap_only"
 - claim_ast can be null for symmetry (handled specially)
+
+For local_transition template (MICRO-level per-cell rules):
+- Include fields: trigger_symbol, result_op, result_symbol
+- Example: "Each X cell resolves in one step"
+  {
+    "law_id": "x_cell_resolves_one_step",
+    "template": "local_transition",
+    "quantifiers": {"T": 50},
+    "trigger_symbol": "X",
+    "result_op": "!=",
+    "result_symbol": "X",
+    "claim": "For each position i: if state[i]=='X' at t, then state[i]!='X' at t+1",
+    "forbidden": "An X cell that remains X at the same position in the next timestep"
+  }
 
 OUTPUT FORMAT:
 [
@@ -226,10 +282,19 @@ Claims must be structured JSON ASTs. Observable expressions are defined separate
 
 OBSERVABLE EXPRESSIONS (in "observables" field):
   Primitives: count('>'), count('<'), count('X'), count('.'), grid_length
+  Position: leftmost(sym), rightmost(sym), spread(sym), max_gap(sym), adjacent_pairs(s1, s2)
   Operators: +, -, *, /
-  Examples:
-    {"name": "R", "expr": "count('>') + count('X')"}
-    {"name": "N", "expr": "count('>') + count('<') + 2*count('X')"}
+
+CANONICAL OBSERVABLE NAMES (use these for clarity):
+  CONSERVED:
+    TotalParticles:  count('>') + count('<') + 2*count('X')   -- use for conservation laws
+    RightComponent:  count('>') + count('X')                  -- use for conservation laws
+    LeftComponent:   count('<') + count('X')                  -- use for conservation laws
+    Momentum:        count('>') - count('<')                  -- use for conservation laws
+  NOT CONSERVED:
+    FreeMovers:      count('>') + count('<')                  -- changes during collisions!
+    OccupiedCells:   count('>') + count('<') + count('X')     -- changes during collisions!
+    CollisionCells:  count('X')                               -- changes each step!
 
 CLAIM AST NODES (in "claim_ast" field):
   Constant:     {"const": 5}
@@ -242,13 +307,13 @@ CLAIM AST NODES (in "claim_ast" field):
   Ops: +, -, *, /, ==, !=, <, <=, >, >=, =>, and, or, not
 
 AST EXAMPLES:
-  N(t) == N(0):
-    {"op": "==", "lhs": {"obs": "N", "t": {"var": "t"}}, "rhs": {"obs": "N", "t": {"const": 0}}}
+  TotalParticles(t) == TotalParticles(0) [CONSERVED - correct]:
+    {"op": "==", "lhs": {"obs": "TotalParticles", "t": {"var": "t"}}, "rhs": {"obs": "TotalParticles", "t": {"const": 0}}}
 
-  X_count(t+1) <= X_count(t):
-    {"op": "<=", "lhs": {"obs": "X_count", "t": {"t_plus_1": true}}, "rhs": {"obs": "X_count", "t": {"var": "t"}}}
+  CollisionCells(t+1) <= CollisionCells(t) [monotone]:
+    {"op": "<=", "lhs": {"obs": "CollisionCells", "t": {"t_plus_1": true}}, "rhs": {"obs": "CollisionCells", "t": {"var": "t"}}}
 
-  P(t) > 0 => Q(t+1):
+  P(t) > 0 => Q(t+1) [implication]:
     {"op": "=>", "lhs": {"op": ">", ...}, "rhs": {..., "t": {"t_plus_1": true}}}
 
 For symmetry_commutation: include "transform" field, claim_ast can be null."""

@@ -5,9 +5,9 @@ from typing import Callable
 from src.claims.ast_evaluator import ASTClaimEvaluator, ASTEvaluationError, create_ast_checker
 from src.claims.compiler import ClaimCompiler, CompilationError, compile_precondition
 from src.claims.schema import CandidateLaw, Template
-from src.claims.templates import CheckResult, TemplateChecker, Violation
+from src.claims.templates import CheckResult, SymmetryCommutationChecker, TemplateChecker, Violation
 from src.harness.case import Case, CaseResult
-from src.harness.vacuity import VacuityReport
+from src.claims.vacuity import VacuityReport
 from src.universe.simulator import run
 from src.universe.types import State, Trajectory
 
@@ -104,6 +104,8 @@ class Evaluator:
         # Check the law against the trajectory
         violation_dict = None
         passed = True
+        antecedent_hits = 0
+        total_checks = len(trajectory)
 
         if self._ast_checker is not None:
             # Use AST-based evaluation
@@ -115,9 +117,17 @@ class Evaluator:
                     "message": f"Claim failed at t={t_fail}",
                     "details": details,
                 }
+            # AST evaluator doesn't track vacuity yet - use total_checks as placeholder
+            antecedent_hits = total_checks
         else:
             # Use string-based evaluation
-            result = self._checker.check(trajectory)
+            # For symmetry_commutation with shift_k, pass k from case metadata
+            if (isinstance(self._checker, SymmetryCommutationChecker) and
+                self._checker.transform_name == "shift_k"):
+                k = case.metadata.get("k") if case.metadata else None
+                result = self._checker.check(trajectory, k=k)
+            else:
+                result = self._checker.check(trajectory)
             passed = result.passed
             if not passed and result.violation:
                 violation_dict = {
@@ -126,6 +136,9 @@ class Evaluator:
                     "message": result.violation.message,
                     "details": result.violation.details,
                 }
+            # Extract vacuity from CheckResult
+            antecedent_hits = result.vacuity.antecedent_true_count
+            total_checks = result.vacuity.total_checks or len(trajectory)
 
         return CaseResult(
             case=case,
@@ -133,12 +146,16 @@ class Evaluator:
             passed=passed,
             violation=violation_dict,
             precondition_met=True,
+            antecedent_hits=antecedent_hits,
+            total_checks=total_checks,
         )
 
     def get_vacuity_report(self, results: list[CaseResult]) -> VacuityReport:
         """Aggregate vacuity information from multiple case results.
 
         This is relevant for implication and eventually templates.
+        For implications, we track how many times the antecedent (LHS) was true.
+        A test is vacuous if the antecedent is NEVER true.
         """
         if self._current_law is None:
             return VacuityReport()
@@ -148,16 +165,29 @@ class Evaluator:
             Template.IMPLICATION_STEP,
             Template.IMPLICATION_STATE,
             Template.EVENTUALLY,
+            Template.LOCAL_TRANSITION,  # Also tracks trigger hits
         ):
             return VacuityReport(is_vacuous=False)
 
-        # For now, we don't have detailed vacuity from template checkers
-        # This would need to be extended to track antecedent hits
-        total_used = sum(1 for r in results if r.precondition_met)
+        # Aggregate antecedent hits from all cases
+        total_antecedent_hits = 0
+        total_checks = 0
+        cases_with_hits = 0
+
+        for r in results:
+            if r.precondition_met:
+                total_antecedent_hits += r.antecedent_hits
+                total_checks += r.total_checks
+                if r.antecedent_hits > 0:
+                    cases_with_hits += 1
+
+        is_vacuous = total_antecedent_hits == 0
+
         return VacuityReport(
-            antecedent_true_count=total_used,  # Placeholder
-            total_checks=total_used,
-            is_vacuous=False,  # Would need template checker support
+            antecedent_true_count=total_antecedent_hits,
+            consequent_evaluated_count=total_antecedent_hits,  # For implications, same as antecedent
+            total_checks=total_checks,
+            is_vacuous=is_vacuous,
         )
 
 

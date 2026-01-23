@@ -86,6 +86,8 @@ class CaseResult:
         passed: Whether the law held for this case
         violation: Details if the law was violated
         precondition_met: Whether preconditions were satisfied
+        antecedent_hits: For implications, how many times antecedent was true
+        total_checks: Total timesteps checked
     """
 
     case: Case
@@ -94,6 +96,8 @@ class CaseResult:
     violation: dict[str, Any] | None = None
     precondition_met: bool = True
     near_miss_score: float = 0.0  # 0-1, higher = closer to violation
+    antecedent_hits: int = 0  # For implications: how many times LHS was true
+    total_checks: int = 0  # Total timesteps evaluated
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""

@@ -3,6 +3,7 @@
 Generates test cases specifically for testing symmetry commutation laws.
 """
 
+import hashlib
 import random
 from typing import Any
 
@@ -19,10 +20,16 @@ class SymmetryMetamorphicGenerator(Generator):
     - Asymmetric states (more likely to find violations)
     - States with collisions (complex dynamics)
 
+    For shift_k transform, ensures:
+    - k values are in {1..L-1} (never 0 or L, which are identity)
+    - At least 2 different k values per grid length L
+    - Logs k, L, state_hash for reproducibility
+
     Parameters:
         grid_lengths: Grid sizes to test
         transform: Which symmetry transform to target
         bias_asymmetric: Weight toward asymmetric states
+        min_k_values_per_length: Minimum distinct k values per grid length (for shift_k)
     """
 
     def family_name(self) -> str:
@@ -36,6 +43,7 @@ class SymmetryMetamorphicGenerator(Generator):
                 "grid_lengths": [8, 16, 32],
                 "transform": "mirror_swap",  # target transform
                 "bias_asymmetric": 0.7,  # fraction of asymmetric cases
+                "min_k_values_per_length": 2,  # for shift_k: minimum distinct k per L
             }
             seed: Random seed
             count: Number of cases to generate
@@ -48,9 +56,14 @@ class SymmetryMetamorphicGenerator(Generator):
         grid_lengths = params.get("grid_lengths", [8, 16, 32])
         transform = params.get("transform", "mirror_swap")
         bias_asymmetric = params.get("bias_asymmetric", 0.7)
+        min_k_values = params.get("min_k_values_per_length", 2)
 
         cases = []
         params_hash = self.params_hash(params)
+
+        # For shift_k, track k values used per grid length to ensure diversity
+        if transform == "shift_k":
+            k_values_used: dict[int, set[int]] = {L: set() for L in grid_lengths}
 
         for i in range(count):
             grid_length = grid_lengths[i % len(grid_lengths)]
@@ -64,19 +77,71 @@ class SymmetryMetamorphicGenerator(Generator):
                 state_type = "symmetric"
 
             case_seed = seed + i
+            state_hash = hashlib.sha256(state.encode()).hexdigest()[:8]
+
+            # Build metadata
+            metadata = {
+                "transform": transform,
+                "state_type": state_type,
+                "state_hash": state_hash,
+            }
+
+            # For shift_k, assign a k value
+            if transform == "shift_k":
+                k = self._select_k_value(
+                    rng, grid_length, k_values_used[grid_length], min_k_values
+                )
+                k_values_used[grid_length].add(k)
+                metadata["k"] = k
+                metadata["L"] = grid_length
+
             cases.append(Case(
                 initial_state=state,
                 config=Config(grid_length=grid_length),
                 seed=case_seed,
                 generator_family=self.family_name(),
                 params_hash=params_hash,
-                metadata={
-                    "transform": transform,
-                    "state_type": state_type,
-                },
+                metadata=metadata,
             ))
 
         return cases
+
+    def _select_k_value(
+        self,
+        rng: random.Random,
+        grid_length: int,
+        used_k: set[int],
+        min_k_values: int,
+    ) -> int:
+        """Select a k value for shift_k, ensuring diversity.
+
+        Rules:
+        - k must be in {1..L-1} (never 0 or L, which are identity)
+        - Prioritize unused k values until min_k_values are covered
+        - After that, select randomly from valid range
+
+        Args:
+            rng: Random number generator
+            grid_length: Grid length L
+            used_k: Set of k values already used for this L
+            min_k_values: Minimum distinct k values to use
+
+        Returns:
+            k value in {1..L-1}
+        """
+        valid_range = list(range(1, grid_length))  # {1..L-1}
+
+        if not valid_range:
+            return 1  # Edge case: L=1, only k=0 is valid but that's identity
+
+        # If we haven't used enough distinct k values, prioritize unused ones
+        if len(used_k) < min_k_values:
+            unused = [k for k in valid_range if k not in used_k]
+            if unused:
+                return rng.choice(unused)
+
+        # Otherwise, select randomly from valid range
+        return rng.choice(valid_range)
 
     def _generate_symmetric_state(
         self,

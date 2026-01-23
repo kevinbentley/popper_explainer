@@ -1,6 +1,7 @@
 from src.harness.generators.base import Generator, GeneratorRegistry
 from src.harness.generators.constrained_pairs import ConstrainedPairGenerator
 from src.harness.generators.edge_wrapping import EdgeWrappingGenerator
+from src.harness.generators.extreme_states import ExtremeStatesGenerator
 from src.harness.generators.pathological import PathologicalGenerator
 from src.harness.generators.random_density import RandomDensityGenerator
 from src.harness.generators.symmetry_suite import SymmetryMetamorphicGenerator
@@ -17,6 +18,7 @@ GeneratorRegistry.register("symmetry_metamorphic_suite", SymmetryMetamorphicGene
 GeneratorRegistry.register("adversarial_mutation_search", AdversarialMutationGenerator)
 GeneratorRegistry.register("guided_adversarial_search", GuidedAdversarialGenerator)
 GeneratorRegistry.register("pathological_cases", PathologicalGenerator)
+GeneratorRegistry.register("extreme_states", ExtremeStatesGenerator)
 
 __all__ = [
     "Generator",
@@ -24,6 +26,7 @@ __all__ = [
     "RandomDensityGenerator",
     "ConstrainedPairGenerator",
     "EdgeWrappingGenerator",
+    "ExtremeStatesGenerator",
     "PathologicalGenerator",
     "SymmetryMetamorphicGenerator",
     "AdversarialMutationGenerator",

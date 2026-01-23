@@ -2,7 +2,7 @@ from src.harness.case import Case, CaseResult
 from src.harness.config import HarnessConfig
 from src.harness.harness import Harness
 from src.harness.power import PowerMetrics
-from src.harness.vacuity import VacuityReport
+from src.claims.vacuity import VacuityReport
 from src.harness.verdict import LawVerdict, ReasonCode
 
 __all__ = [

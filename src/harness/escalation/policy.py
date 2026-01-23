@@ -21,13 +21,20 @@ class EscalationPolicyConfig:
     """Configuration for escalation policy during discovery.
 
     Status model:
-    - Baseline PASS = PROVISIONAL (not fully accepted yet)
+    - Baseline PASS = PROVISIONAL (for most templates)
+    - Baseline PASS = ACCEPTED (for quick_promotion_templates only)
     - Escalation_1 PASS = ACCEPTED (promoted)
     - Any FAIL = REVOKED
+
+    Template-based promotion:
+    - `invariant` laws get quick promotion (baseline PASS is enough)
+    - All other templates stay PROVISIONAL until escalation_1 passes
+    - This prevents fragile implications/bounds from being trusted too early
 
     Attributes:
         min_accepted_laws: Minimum baseline-passed laws before escalation starts (M)
         min_template_families: Minimum distinct template families required
+        quick_promotion_templates: Templates that get accepted on baseline PASS alone
         escalation_1_interval: Run escalation_1 every K iterations (3-5)
         escalation_1_window: Only test laws accepted in last W iterations
         escalation_1_priority_templates: Templates to prioritize for escalation_1
@@ -40,6 +47,11 @@ class EscalationPolicyConfig:
     min_accepted_laws: int = 5
     min_template_families: int = 2
 
+    # Template-based promotion rules
+    # Only these templates get quick promotion (baseline PASS = accepted)
+    # All other templates stay provisional until escalation_1 passes
+    quick_promotion_templates: list[str] = None  # type: ignore
+
     # Escalation_1: cheap, frequent - promotes provisional to accepted
     escalation_1_interval: int = 4  # Every 3-5 iterations
     escalation_1_window: int = 8  # Test laws from last W iterations
@@ -51,6 +63,14 @@ class EscalationPolicyConfig:
     novelty_window: int = 5  # Window for measuring novelty
 
     def __post_init__(self):
+        # Default quick promotion templates: only invariant
+        # Invariants are the most robust - they make a claim about ALL timesteps
+        # and are hard to accidentally satisfy with special initial conditions
+        if self.quick_promotion_templates is None:
+            self.quick_promotion_templates = [
+                "invariant",
+            ]
+
         # Default priority templates for escalation_1: implications and bounds
         # These are more likely to be fragile and need early validation
         if self.escalation_1_priority_templates is None:
@@ -59,6 +79,8 @@ class EscalationPolicyConfig:
                 "implication_state",
                 "bound",
                 "eventually",
+                "symmetry_commutation",
+                "monotone",
             ]
 
 
@@ -227,21 +249,61 @@ def get_laws_for_escalation_1(
     return sorted(recent_needing, key=priority_key)
 
 
-def is_law_promoted(law_id: str, repo: "Repository") -> bool:
-    """Check if a law has been promoted to ACCEPTED (passed escalation_1).
+def is_law_promoted(
+    law_id: str,
+    repo: "Repository",
+    config: EscalationPolicyConfig | None = None,
+) -> bool:
+    """Check if a law has been promoted to ACCEPTED.
+
+    Promotion rules depend on template:
+    - Quick promotion templates (default: invariant): baseline PASS is enough
+    - All other templates: require escalation_1 PASS
 
     A law is promoted if:
-    - It has a law_retest record at escalation_1 level with flip_type='stable'
+    - It's a quick_promotion template AND passed baseline evaluation
+    - OR it has a law_retest at escalation_1+ level with flip_type='stable'
 
-    Returns False if law is still provisional (baseline PASS only).
+    Args:
+        law_id: The law to check
+        repo: Database repository
+        config: Policy config (uses defaults if None)
+
+    Returns:
+        True if law is promoted to ACCEPTED status
     """
-    # Check for escalation_1 retest with PASS result
+    if config is None:
+        config = EscalationPolicyConfig()
+
+    # Fetch the law to check its template
+    law_record = repo.get_law(law_id)
+    if not law_record:
+        return False
+
+    # Parse the law to get template
+    import json
+    law_json = json.loads(law_record.law_json)
+    template = law_json.get("template", "")
+
+    # Quick promotion templates: baseline PASS is enough
+    if template in config.quick_promotion_templates:
+        # Check if law has a passing evaluation (latest)
+        latest_eval = repo.get_latest_evaluation(law_id)
+        if latest_eval and latest_eval.status == "PASS":
+            return True
+        return False
+
+    # Other templates: require escalation_1 PASS
     retests = repo.get_retests_by_flip_type("stable", limit=1000)
     for retest, law in retests:
         if law.law_id == law_id:
-            # Check if this retest was at escalation_1 level
+            # Check if this retest was at escalation_1+ level
             run = repo.get_escalation_run(retest.escalation_run_id)
-            if run and run.level == EscalationLevel.ESCALATION_1.value:
+            if run and run.level in (
+                EscalationLevel.ESCALATION_1.value,
+                EscalationLevel.ESCALATION_2.value,
+                EscalationLevel.ESCALATION_3.value,
+            ):
                 return True
     return False
 
@@ -249,41 +311,91 @@ def is_law_promoted(law_id: str, repo: "Repository") -> bool:
 def get_promotion_status(
     law_ids: list[str],
     repo: "Repository",
+    config: EscalationPolicyConfig | None = None,
 ) -> dict[str, str]:
     """Get promotion status for multiple laws.
 
+    Promotion rules depend on template:
+    - Quick promotion templates (default: invariant): baseline PASS → 'accepted'
+    - Other templates: require escalation_1 PASS for 'accepted'
+
     Returns dict mapping law_id to status:
-    - 'accepted': Passed escalation_1 (promoted)
-    - 'provisional': Passed baseline only (not yet escalated)
+    - 'accepted': Promoted (quick template + baseline OR escalation_1 passed)
+    - 'provisional': Passed baseline only but requires escalation
     - 'revoked': Failed at some escalation level
+
+    Args:
+        law_ids: Laws to check
+        repo: Database repository
+        config: Policy config (uses defaults if None)
+
+    Returns:
+        Dict mapping law_id to status string
     """
+    import json
+
+    if config is None:
+        config = EscalationPolicyConfig()
+
     status_map: dict[str, str] = {}
 
     # Get all retests
     stable_retests = repo.get_retests_by_flip_type("stable", limit=10000)
     revoked_retests = repo.get_retests_by_flip_type("revoked", limit=10000)
 
-    # Build lookup for escalation_1 stable retests
-    promoted_ids: set[str] = set()
+    # Build lookup for escalation_1+ stable retests
+    escalation_promoted_ids: set[str] = set()
     for retest, law in stable_retests:
         run = repo.get_escalation_run(retest.escalation_run_id)
-        if run and run.level in (EscalationLevel.ESCALATION_1.value,
-                                  EscalationLevel.ESCALATION_2.value):
-            promoted_ids.add(law.law_id)
+        if run and run.level in (
+            EscalationLevel.ESCALATION_1.value,
+            EscalationLevel.ESCALATION_2.value,
+            EscalationLevel.ESCALATION_3.value,
+        ):
+            escalation_promoted_ids.add(law.law_id)
 
     # Build lookup for revoked laws
     revoked_ids: set[str] = set()
     for retest, law in revoked_retests:
         revoked_ids.add(law.law_id)
 
+    # Pre-fetch law records for template checking
+    law_templates: dict[str, str] = {}
+    law_has_baseline_pass: dict[str, bool] = {}
+
+    for law_id in law_ids:
+        law_record = repo.get_law(law_id)
+        if law_record:
+            law_json = json.loads(law_record.law_json)
+            law_templates[law_id] = law_json.get("template", "")
+
+            # Check for baseline pass (latest evaluation)
+            latest_eval = repo.get_latest_evaluation(law_id)
+            law_has_baseline_pass[law_id] = (
+                latest_eval is not None and latest_eval.status == "PASS"
+            )
+
     # Classify each law
     for law_id in law_ids:
         if law_id in revoked_ids:
             status_map[law_id] = "revoked"
-        elif law_id in promoted_ids:
+        elif law_id in escalation_promoted_ids:
+            # Explicitly passed escalation → accepted regardless of template
             status_map[law_id] = "accepted"
         else:
-            status_map[law_id] = "provisional"
+            # Check template-based promotion
+            template = law_templates.get(law_id, "")
+            has_pass = law_has_baseline_pass.get(law_id, False)
+
+            if template in config.quick_promotion_templates and has_pass:
+                # Quick promotion template with baseline pass → accepted
+                status_map[law_id] = "accepted"
+            elif has_pass:
+                # Other template with baseline pass → provisional
+                status_map[law_id] = "provisional"
+            else:
+                # No baseline pass → not even provisional
+                status_map[law_id] = "unknown"
 
     return status_map
 

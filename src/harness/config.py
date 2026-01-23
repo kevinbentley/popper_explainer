@@ -20,6 +20,7 @@ class HarnessConfig:
         minimization_budget: Max attempts for minimization
         store_full_trajectories: Whether to store complete trajectories
         require_non_vacuous: Require non-vacuous tests for implications
+        min_antecedent_triggers: Minimum antecedent triggers for implications to pass
     """
 
     seed: int = 42
@@ -34,15 +35,18 @@ class HarnessConfig:
     minimization_budget: int = 300
     store_full_trajectories: bool = False
     require_non_vacuous: bool = True
+    min_antecedent_triggers: int = 5  # Require at least 5 antecedent hits for implications
 
     # Generator weights for default strategy
     # pathological_cases is critical for catching false positives from uniform grids
+    # extreme_states helps trigger rare antecedents in implication laws
     generator_weights: dict[str, float] = field(default_factory=lambda: {
-        "random_density_sweep": 0.35,
-        "constrained_pair_interactions": 0.25,
+        "random_density_sweep": 0.30,
+        "constrained_pair_interactions": 0.20,
         "edge_wrapping_cases": 0.15,
         "symmetry_metamorphic_suite": 0.15,
         "pathological_cases": 0.10,  # Uniform grids, alternating patterns, edge cases
+        "extreme_states": 0.10,  # Full collision grids, max density states
     })
 
     def content_hash(self) -> str:

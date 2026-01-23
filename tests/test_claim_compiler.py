@@ -20,6 +20,7 @@ from src.claims.templates import (
     ImplicationStateChecker,
     ImplicationStepChecker,
     InvariantChecker,
+    LocalTransitionChecker,
     MonotoneChecker,
     SymmetryCommutationChecker,
 )
@@ -451,3 +452,186 @@ class TestCompilerErrors:
         compiler = ClaimCompiler()
         with pytest.raises(CompilationError, match="exactly 1 observable"):
             compiler.compile(law)
+
+
+class TestLocalTransitionChecker:
+    """Tests for local_transition template (micro-level per-cell rules)."""
+
+    def test_local_transition_x_resolves(self):
+        """Test that each X cell resolves in one step (micro-law that is TRUE)."""
+        law = CandidateLaw(
+            law_id="x_cell_resolves",
+            template=Template.LOCAL_TRANSITION,
+            quantifiers=Quantifiers(T=10),
+            claim="Each X cell becomes non-X in the next step",
+            forbidden="An X cell that remains X at the same position",
+            trigger_symbol="X",
+            result_op=ComparisonOp.NE,
+            result_symbol="X",
+        )
+
+        compiler = ClaimCompiler()
+        checker = compiler.compile(law)
+        assert isinstance(checker, LocalTransitionChecker)
+
+        # Test with a state that creates collision
+        trajectory = run(".>.<.", 10)
+        result = checker.check(trajectory)
+        assert result.passed
+        assert result.vacuity.antecedent_true_count > 0  # X cells were tested
+
+    def test_local_transition_tracks_individual_cells(self):
+        """Test that micro-law passes even when aggregate X count persists."""
+        law = CandidateLaw(
+            law_id="x_cell_resolves_micro",
+            template=Template.LOCAL_TRANSITION,
+            quantifiers=Quantifiers(T=20),
+            claim="Each X cell resolves at its position",
+            forbidden="An X cell that remains X at same position",
+            trigger_symbol="X",
+            result_op=ComparisonOp.NE,
+            result_symbol="X",
+        )
+
+        compiler = ClaimCompiler()
+        checker = compiler.compile(law)
+
+        # This creates multiple collisions at different times/positions
+        # Aggregate X count may persist, but individual X cells resolve
+        trajectory = run(".>.>.<.<.", 20)
+        result = checker.check(trajectory)
+        assert result.passed
+
+    def test_local_transition_requires_trigger_symbol(self):
+        """Test that compilation fails without trigger_symbol."""
+        law = CandidateLaw(
+            law_id="no_trigger",
+            template=Template.LOCAL_TRANSITION,
+            quantifiers=Quantifiers(T=10),
+            claim="test",
+            forbidden="test",
+            # trigger_symbol missing
+            result_op=ComparisonOp.NE,
+            result_symbol="X",
+        )
+
+        compiler = ClaimCompiler()
+        with pytest.raises(CompilationError, match="trigger_symbol"):
+            compiler.compile(law)
+
+    def test_local_transition_requires_result_op(self):
+        """Test that compilation fails without result_op."""
+        law = CandidateLaw(
+            law_id="no_result_op",
+            template=Template.LOCAL_TRANSITION,
+            quantifiers=Quantifiers(T=10),
+            claim="test",
+            forbidden="test",
+            trigger_symbol="X",
+            # result_op missing
+            result_symbol="X",
+        )
+
+        compiler = ClaimCompiler()
+        with pytest.raises(CompilationError, match="result_op"):
+            compiler.compile(law)
+
+    def test_local_transition_requires_result_symbol(self):
+        """Test that compilation fails without result_symbol."""
+        law = CandidateLaw(
+            law_id="no_result_symbol",
+            template=Template.LOCAL_TRANSITION,
+            quantifiers=Quantifiers(T=10),
+            claim="test",
+            forbidden="test",
+            trigger_symbol="X",
+            result_op=ComparisonOp.NE,
+            # result_symbol missing
+        )
+
+        compiler = ClaimCompiler()
+        with pytest.raises(CompilationError, match="result_symbol"):
+            compiler.compile(law)
+
+    def test_local_transition_rejects_invalid_op(self):
+        """Test that compilation fails with invalid result_op (only == and != allowed)."""
+        law = CandidateLaw(
+            law_id="invalid_op",
+            template=Template.LOCAL_TRANSITION,
+            quantifiers=Quantifiers(T=10),
+            claim="test",
+            forbidden="test",
+            trigger_symbol="X",
+            result_op=ComparisonOp.LE,  # Not allowed for local_transition
+            result_symbol="X",
+        )
+
+        compiler = ClaimCompiler()
+        with pytest.raises(CompilationError, match="must be '==' or '!='"):
+            compiler.compile(law)
+
+    def test_local_transition_vacuity_tracking(self):
+        """Test that vacuity is tracked when trigger never fires."""
+        law = CandidateLaw(
+            law_id="vacuous_local",
+            template=Template.LOCAL_TRANSITION,
+            quantifiers=Quantifiers(T=10),
+            claim="Each X cell resolves",
+            forbidden="X remains X",
+            trigger_symbol="X",
+            result_op=ComparisonOp.NE,
+            result_symbol="X",
+        )
+
+        compiler = ClaimCompiler()
+        checker = compiler.compile(law)
+
+        # Trajectory with no X cells ever
+        trajectory = run(">....<", 10)
+        result = checker.check(trajectory)
+        assert result.passed
+        assert result.vacuity.is_vacuous  # No X cells to test
+
+    def test_local_transition_becomes_specific_symbol(self):
+        """Test local_transition with == operator (cell becomes specific symbol)."""
+        # Test: each X cell becomes empty (.) - this is TRUE for the physics!
+        law = CandidateLaw(
+            law_id="x_becomes_not_x",
+            template=Template.LOCAL_TRANSITION,
+            quantifiers=Quantifiers(T=10),
+            claim="Each X cell becomes non-X",
+            forbidden="An X cell that remains X",
+            trigger_symbol="X",
+            result_op=ComparisonOp.NE,
+            result_symbol="X",
+        )
+
+        compiler = ClaimCompiler()
+        checker = compiler.compile(law)
+
+        # X resolves into < and > moving apart, so position stays non-X
+        trajectory = run("..X..", 5)
+        result = checker.check(trajectory)
+        assert result.passed
+
+    def test_local_transition_false_rule(self):
+        """Test a local_transition rule that is FALSE."""
+        # False rule: each empty cell stays empty (FALSE because particles move into empty cells)
+        law = CandidateLaw(
+            law_id="empty_stays_empty",
+            template=Template.LOCAL_TRANSITION,
+            quantifiers=Quantifiers(T=10),
+            claim="Each empty cell stays empty",
+            forbidden="An empty cell that becomes occupied",
+            trigger_symbol=".",
+            result_op=ComparisonOp.EQ,
+            result_symbol=".",
+        )
+
+        compiler = ClaimCompiler()
+        checker = compiler.compile(law)
+
+        # This should FAIL because > moves into empty cells
+        trajectory = run(">...", 5)
+        result = checker.check(trajectory)
+        assert not result.passed  # > moves into empty cell at position 1

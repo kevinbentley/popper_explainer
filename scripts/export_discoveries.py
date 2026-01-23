@@ -16,15 +16,23 @@ from src.claims.ast_schema import ast_to_string
 from src.claims.fingerprint import compute_semantic_fingerprint
 from src.claims.schema import CandidateLaw
 from src.db.repo import Repository
-from src.harness.escalation import EscalationLevel
+from src.harness.escalation import (
+    EscalationLevel,
+    EscalationPolicyConfig,
+    get_promotion_status as _get_promotion_status_batch,
+)
 
 
 def get_promotion_status(repo: Repository, law_id: str) -> str:
     """Determine the promotion status of a law.
 
+    Uses template-based promotion rules:
+    - 'invariant' template: baseline PASS is enough for 'promoted'
+    - Other templates: require escalation_1 PASS for 'promoted'
+
     Returns one of:
-    - 'promoted': Passed escalation_1 (fully accepted)
-    - 'provisional': Passed baseline only
+    - 'promoted': Fully accepted (quick template or escalation passed)
+    - 'provisional': Passed baseline only, requires escalation
     - 'revoked': Failed during escalation
     - 'failed': Failed at baseline
     - 'unknown': Unknown status
@@ -53,20 +61,14 @@ def get_promotion_status(repo: Repository, law_id: str) -> str:
     if latest_status == "UNKNOWN":
         return "unknown"
 
-    # Status is PASS - check if promoted
-    retests = list(repo.conn.execute(
-        """SELECT lr.flip_type, er.level
-           FROM law_retests lr
-           JOIN escalation_runs er ON lr.escalation_run_id = er.id
-           WHERE lr.law_id = ? AND lr.flip_type = 'stable'
-           AND er.level IN ('escalation_1', 'escalation_2', 'escalation_3')""",
-        (law_id,)
-    ))
+    # Status is PASS - use centralized promotion logic with template rules
+    status_map = _get_promotion_status_batch([law_id], repo)
+    status = status_map.get(law_id, "unknown")
 
-    if retests:
+    # Map to export-friendly names
+    if status == "accepted":
         return "promoted"
-
-    return "provisional"
+    return status
 
 
 def export_discoveries(db_path: Path, output_path: Path) -> None:

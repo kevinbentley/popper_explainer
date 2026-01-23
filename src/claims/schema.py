@@ -23,6 +23,7 @@ class Template(str, Enum):
     EVENTUALLY = "eventually"  # ∀t0: P(t0) → ∃t∈[t0..t0+H]: Q(t)
     SYMMETRY_COMMUTATION = "symmetry_commutation"  # evolve(T(S)) == T(evolve(S))
     BOUND = "bound"  # ∀t∈[0..T]: f(t) <= k or >=
+    LOCAL_TRANSITION = "local_transition"  # ∀t,i: state[i]==P at t → state[i] satisfies Q at t+1
 
 
 class ComparisonOp(str, Enum):
@@ -148,6 +149,19 @@ class CandidateLaw(BaseModel):
         default=None, description="Comparison operator for bound template"
     )
 
+    # Local transition template fields
+    # Express: for each position i, if state[i]==trigger_symbol at t,
+    # then state[i] result_op result_symbol at t+1
+    trigger_symbol: str | None = Field(
+        default=None, description="Symbol that triggers the local rule (for local_transition)"
+    )
+    result_op: ComparisonOp | None = Field(
+        default=None, description="Comparison operator for result (== or !=)"
+    )
+    result_symbol: str | None = Field(
+        default=None, description="Symbol to compare result against"
+    )
+
     # Metadata
     proposed_tests: list[ProposedTest] = Field(
         default_factory=list, description="Suggested test families"
@@ -191,6 +205,10 @@ class CandidateLaw(BaseModel):
             "direction": self.direction.value if self.direction else None,
             "bound_value": self.bound_value,
             "bound_op": self.bound_op.value if self.bound_op else None,
+            # Local transition fields
+            "trigger_symbol": self.trigger_symbol,
+            "result_op": self.result_op.value if self.result_op else None,
+            "result_symbol": self.result_symbol,
         }
         content_str = json.dumps(content, sort_keys=True)
         return hashlib.sha256(content_str.encode()).hexdigest()[:16]
