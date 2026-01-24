@@ -590,3 +590,76 @@ def suggest_canonical_observable(observable_name: str, expression: str) -> str |
     if canonical and canonical.lower() != observable_name.lower():
         return canonical
     return None
+
+
+# =============================================================================
+# PHASE-D: Observable Glossary Generation
+# =============================================================================
+
+
+def generate_glossary_entries() -> list[dict]:
+    """Extract glossary entries from CANONICAL_OBSERVABLES.
+
+    Returns:
+        List of glossary entry dicts with keys:
+        - name: Observable name
+        - expression: Definition expression
+        - description: Human-readable description
+        - conservation: Conservation status string
+        - notes: Additional notes
+    """
+    entries = []
+    for name, obs in CANONICAL_OBSERVABLES.items():
+        entries.append({
+            "name": name,
+            "expression": obs.expression,
+            "description": obs.description,
+            "conservation": obs.conservation.value,
+            "notes": obs.notes,
+        })
+    return entries
+
+
+def format_glossary_block() -> str:
+    """Format glossary as markdown for prompt injection.
+
+    Returns:
+        Formatted markdown string with observable glossary
+    """
+    lines = [
+        "### OBSERVABLE GLOSSARY",
+        "",
+        "The following observables are available. Use canonical names in theorems.",
+        "",
+        "| Name | Definition | Status |",
+        "|------|------------|--------|",
+    ]
+
+    # Sort by conservation status (conserved first), then by name
+    def sort_key(item: tuple) -> tuple:
+        name, obs = item
+        status_order = {
+            ConservationStatus.CONSERVED: 0,
+            ConservationStatus.CONDITIONAL: 1,
+            ConservationStatus.NOT_CONSERVED: 2,
+        }
+        return (status_order.get(obs.conservation, 3), name)
+
+    sorted_observables = sorted(CANONICAL_OBSERVABLES.items(), key=sort_key)
+
+    for name, obs in sorted_observables:
+        # Format conservation status as compact indicator
+        status_map = {
+            ConservationStatus.CONSERVED: "[C] Conserved",
+            ConservationStatus.CONDITIONAL: "[?] Conditional",
+            ConservationStatus.NOT_CONSERVED: "[~] Not conserved",
+        }
+        status_str = status_map.get(obs.conservation, "[?]")
+
+        # Escape pipes in expression
+        expr = obs.expression.replace("|", "\\|")
+
+        lines.append(f"| {name} | `{expr}` | {status_str} |")
+
+    lines.append("")
+    return "\n".join(lines)

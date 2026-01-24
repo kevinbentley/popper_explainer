@@ -1,0 +1,377 @@
+{
+  "run_id": "thm_run_bcf822397b71",
+  "status": "completed",
+  "generated_at": "2026-01-24 14:38:04",
+  "theorems": [
+    {
+      "theorem_id": "thm_d53770fda0ad",
+      "name": "Fundamental Component Conservation and Mover Generation",
+      "status": "Established",
+      "claim": "The total count of particles with potential for rightward motion ('RightComponent') or leftward motion ('LeftComponent') is strictly conserved if it is initially zero. These components are necessary precursors for the existence of 'RightMovers' or 'LeftMovers' respectively in the subsequent state. The 'TotalParticles' count itself is also a conserved quantity in the system.",
+      "support": [
+        {
+          "law_id": "no_right_component_no_future_right_movers",
+          "role": "confirms"
+        },
+        {
+          "law_id": "no_left_component_no_future_left_movers",
+          "role": "confirms"
+        },
+        {
+          "law_id": "right_component_conserved_if_zero",
+          "role": "confirms"
+        }
+      ],
+      "failure_modes": [
+        "This theorem does not claim conservation of 'LeftMovers' or 'RightMovers' themselves, only their underlying components, which are known to vary."
+      ],
+      "missing_structure": [
+        "LeftComponent and RightComponent dynamics"
+      ],
+      "failure_signature_hash": "59df5a4aac0cdcef9875fa25"
+    },
+    {
+      "theorem_id": "thm_640d6165b4e1",
+      "name": "Collision Initiation Requirements and Upper Bounds",
+      "status": "Established",
+      "claim": "Incoming collisions ('IncomingCollisions') are strictly prevented in minimal systems (GridLength = 1 or TotalParticles <= 1) and are impossible without a 'LeftComponent'. The number of 'IncomingCollisions' is universally bounded by the minimum of 'LeftComponent' and 'RightComponent', and also by the count of 'AdjacentRL' pairs.",
+      "support": [
+        {
+          "law_id": "single_cell_grid_no_incoming_collisions",
+          "role": "confirms"
+        },
+        {
+          "law_id": "no_incoming_collisions_if_few_particles",
+          "role": "confirms"
+        },
+        {
+          "law_id": "no_left_component_no_incoming_collisions",
+          "role": "confirms"
+        },
+        {
+          "law_id": "incoming_collisions_bound_by_components",
+          "role": "confirms"
+        },
+        {
+          "law_id": "collision_formation_bound",
+          "role": "confirms"
+        },
+        {
+          "law_id": "incoming_collisions_at_least_adjacent_x_pairs",
+          "role": "refutes_alternative"
+        }
+      ],
+      "failure_modes": [
+        "The mere presence of 'AdjacentRL' pairs does not guarantee an equal number of 'IncomingCollisions', only an upper limit."
+      ],
+      "missing_structure": [
+        "Local collision conditions"
+      ],
+      "failure_signature_hash": "93a4ef2edee137455fef0f5b"
+    },
+    {
+      "theorem_id": "thm_81d856345d12",
+      "name": "Dynamic Nature of Movers and Collision Cell Influence",
+      "status": "Established",
+      "claim": "'LeftMovers' are conditionally conserved, but only in the absence of 'CollisionCells'. The spatial spread of 'RightMovers' is not a conserved quantity and can change even when only right movers are present or when no collisions are occurring. Furthermore, the count of 'CollisionCells' is not necessarily bounded by the number of 'FreeMovers'.",
+      "support": [
+        {
+          "law_id": "left_movers_conditionally_conserved",
+          "role": "confirms"
+        },
+        {
+          "law_id": "spread_right_movers_conserved_if_only_right_movers",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "no_collisions_preserves_right_spread",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "collision_cells_bound_by_free_movers",
+          "role": "refutes_alternative"
+        }
+      ],
+      "failure_modes": [
+        "Assuming 'LeftMovers' are always conserved, or that 'RightMovers' spread is stable, or that 'CollisionCells' are limited by 'FreeMovers', are all false."
+      ],
+      "missing_structure": [
+        "Collision-mover interaction"
+      ],
+      "failure_signature_hash": "ae2c9096b3176ce303b3e2b5"
+    },
+    {
+      "theorem_id": "thm_0c93aa246830",
+      "name": "Invariant and Dynamic Properties of Empty and Occupied Cells",
+      "status": "Established",
+      "claim": "The total number of 'OccupiedCells' is bounded by 'GridLength', and is definitionally equal to the sum of 'FreeMovers' and 'CollisionCells'. The change in 'EmptyCells' between time steps is precisely equal to the number of 'IncomingCollisions' minus the number of 'CollisionCells' in the next state. However, 'EmptyCells' are not guaranteed to be non-decreasing, and their spatial distribution ('max_gap_empty') is not conserved, even in the absence of new collisions.",
+      "support": [
+        {
+          "law_id": "occupied_cells_bound_by_grid_length",
+          "role": "confirms"
+        },
+        {
+          "law_id": "derived_invariant_occupied_freemovers_relation",
+          "role": "confirms"
+        },
+        {
+          "law_id": "empty_cells_net_collision_relation",
+          "role": "confirms"
+        },
+        {
+          "law_id": "empty_cells_exchange_rate",
+          "role": "confirms"
+        },
+        {
+          "law_id": "spread_empty_non_decreasing",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "empty_cells_increase_or_stay_if_no_new_collisions",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "max_gap_empty_conservation_no_collisions",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "occupied_cells_change_relation",
+          "role": "refutes_alternative"
+        }
+      ],
+      "failure_modes": [
+        "Assumptions about 'EmptyCells' monotonically increasing or 'max_gap_empty' remaining constant without collisions are false."
+      ],
+      "missing_structure": [
+        "Local empty cell dynamics"
+      ],
+      "failure_signature_hash": "2da3c0be0b4738d547b3229b"
+    },
+    {
+      "theorem_id": "thm_cd0522a11d9e",
+      "name": "Collision Persistence and System-Wide Bounds",
+      "status": "Established",
+      "claim": "'CollisionCells' do not necessarily resolve and can persist indefinitely over time, even in the absence of new 'IncomingCollisions'. The total number of 'CollisionCells' is universally bounded by half the 'GridLength', and 'IncomingCollisions' are bounded by the total 'OccupiedCells'.",
+      "support": [
+        {
+          "law_id": "total_collision_activity_bound_by_grid_length",
+          "role": "confirms"
+        },
+        {
+          "law_id": "incoming_collisions_bound_by_occupied_cells",
+          "role": "confirms"
+        },
+        {
+          "law_id": "collisions_eventually_resolve",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "all_collisions_eventually_resolve",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "collisions_resolve_if_no_incoming",
+          "role": "refutes_alternative"
+        }
+      ],
+      "failure_modes": [
+        "Any assumption that 'CollisionCells' are inherently transient or will eventually disappear is false."
+      ],
+      "missing_structure": [
+        "Stable collision state dynamics"
+      ],
+      "failure_signature_hash": "d07c323bc70344573544a348"
+    },
+    {
+      "theorem_id": "thm_8856e64fe060",
+      "name": "Momentum and Free Mover Bounds and Conditional Definitions",
+      "status": "Established",
+      "claim": "'Momentum' and 'FreeMovers' are both universally bounded by 'GridLength'. 'Momentum' is equivalent to the difference between 'RightMovers' and 'LeftMovers' only in the complete absence of 'CollisionCells'. However, zero 'Momentum' does not imply an equal count of 'LeftMovers' and 'RightMovers', and 'IncomingCollisions' can still occur even when 'FreeMovers' are zero.",
+      "support": [
+        {
+          "law_id": "momentum_bound_by_grid_length",
+          "role": "confirms"
+        },
+        {
+          "law_id": "free_movers_bounded_by_grid_length",
+          "role": "confirms"
+        },
+        {
+          "law_id": "momentum_from_components_if_no_collisions",
+          "role": "confirms"
+        },
+        {
+          "law_id": "zero_momentum_implies_collision_balance",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "no_free_no_incoming_collisions",
+          "role": "refutes_alternative"
+        }
+      ],
+      "failure_modes": [
+        "Assuming 'Momentum' = 0 implies 'RightMovers' = 'LeftMovers', or that 'FreeMovers' are required for 'IncomingCollisions', are both false."
+      ],
+      "missing_structure": [
+        "Collision cell influence on momentum"
+      ],
+      "failure_signature_hash": "78dcd4bbbcde682e89606e14"
+    },
+    {
+      "theorem_id": "thm_c90420bc60d5",
+      "name": "Absence of Global Symmetries",
+      "status": "Established",
+      "claim": "The fundamental physical laws governing the universe are not symmetric under simple spatial mirroring or under the swapping of '>' and '<' particle identities. This indicates a fundamental handedness and intrinsic difference between particle types that is not interchangeable.",
+      "support": [
+        {
+          "law_id": "mirror_symmetry_spatial",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "swap_symmetry_particles",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "symmetry_mirror_only",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "swap_symmetry",
+          "role": "refutes_alternative"
+        }
+      ],
+      "failure_modes": [
+        "Any theoretical model assuming these global symmetries would be fundamentally incorrect."
+      ],
+      "missing_structure": [
+        "Local symmetries"
+      ],
+      "failure_signature_hash": "5011ac963ce4da83efde3ae4"
+    },
+    {
+      "theorem_id": "thm_8d63712c8dc4",
+      "name": "Conditional Absence of Incoming Collisions and Counter-Intuitive Scenarios",
+      "status": "Established",
+      "claim": "'IncomingCollisions' are guaranteed to be zero if 'TotalParticles' is one or less, or if 'GridLength' is one, or if 'LeftComponent' is zero. However, 'IncomingCollisions' can surprisingly occur even if 'LeftMovers', 'RightMovers', or 'FreeMovers' are zero, or if the grid is entirely 'OccupiedCells'.",
+      "support": [
+        {
+          "law_id": "no_incoming_collisions_if_few_particles",
+          "role": "confirms"
+        },
+        {
+          "law_id": "single_cell_grid_no_incoming_collisions",
+          "role": "confirms"
+        },
+        {
+          "law_id": "no_left_component_no_incoming_collisions",
+          "role": "confirms"
+        },
+        {
+          "law_id": "no_left_movers_implies_no_incoming_collisions",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "no_right_movers_implies_no_incoming_collisions",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "no_free_no_incoming_collisions",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "full_grid_no_incoming_collisions",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "full_grid_implies_collisions",
+          "role": "refutes_alternative"
+        }
+      ],
+      "failure_modes": [
+        "Assuming the absence of 'FreeMovers' or a fully 'OccupiedCells' grid implies the absence of 'IncomingCollisions' is false. Also, a full grid does not guarantee collisions."
+      ],
+      "missing_structure": [
+        "Collision generation from X cells"
+      ],
+      "failure_signature_hash": "a33e9b2a8702e399f702d258"
+    },
+    {
+      "theorem_id": "thm_f16049243648",
+      "name": "Component-Collision Interplay and Grid Occupancy Constraints",
+      "status": "Established",
+      "claim": "The state of having zero 'RightComponent' or 'LeftComponent' is stable and prevents the generation of 'RightMovers' or 'LeftMovers' respectively in the next step. Crucially, the absence of 'LeftMovers' does not mean the absence of 'CollisionCells'. Furthermore, a relationship exists where 'GridLength' minus 'FreeMovers' is always less than or equal to the sum of 'CollisionCells' and 'EmptyCells'.",
+      "support": [
+        {
+          "law_id": "no_right_component_no_future_right_movers",
+          "role": "confirms"
+        },
+        {
+          "law_id": "right_component_conserved_if_zero",
+          "role": "confirms"
+        },
+        {
+          "law_id": "no_left_component_no_future_left_movers",
+          "role": "confirms"
+        },
+        {
+          "law_id": "no_left_movers_implies_no_x_cells",
+          "role": "refutes_alternative"
+        },
+        {
+          "law_id": "grid_length_minus_freemovers_bound_by_collision_cells",
+          "role": "confirms"
+        }
+      ],
+      "failure_modes": [
+        "Assuming 'LeftMovers' are the sole source of 'CollisionCells' or that 'CollisionCells' cannot exist without 'LeftMovers' is false."
+      ],
+      "missing_structure": [
+        "X cell contribution to components"
+      ],
+      "failure_signature_hash": "d693ae188ae2aab2d6b6b7f6"
+    },
+    {
+      "theorem_id": "thm_448f94998f68",
+      "name": "System-Wide Bounds on Particle Counts and Collision Potential",
+      "status": "Established",
+      "claim": "All dynamic particle counts, specifically 'FreeMovers', 'OccupiedCells', 'Momentum', and 'CollisionCells', are globally bounded by the 'GridLength' or a fraction thereof. The number of 'AdjacentRL' pairs is bounded both by 'FreeMovers' and 'GridLength'/2, and 'IncomingCollisions' are bounded by half the 'TotalParticles' count, provided no 'CollisionCells' are present.",
+      "support": [
+        {
+          "law_id": "free_movers_bounded_by_grid_length",
+          "role": "confirms"
+        },
+        {
+          "law_id": "occupied_cells_bound_by_grid_length",
+          "role": "confirms"
+        },
+        {
+          "law_id": "momentum_bound_by_grid_length",
+          "role": "confirms"
+        },
+        {
+          "law_id": "total_collision_activity_bound_by_grid_length",
+          "role": "confirms"
+        },
+        {
+          "law_id": "adjacent_pairs_gt_lt_bound_by_free_movers",
+          "role": "confirms"
+        },
+        {
+          "law_id": "adjacent_rl_pairs_bound",
+          "role": "confirms"
+        },
+        {
+          "law_id": "incoming_collisions_bounded_by_half_total_particles_if_no_x",
+          "role": "confirms"
+        }
+      ],
+      "failure_modes": [
+        "None directly from FAIL laws, as this theorem synthesizes various upper bounds."
+      ],
+      "missing_structure": [
+        "Dynamic bound enforcement"
+      ],
+      "failure_signature_hash": "e3b0a410cdcff117b6a2484c"
+    }
+  ]
+}

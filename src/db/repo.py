@@ -9,13 +9,25 @@ from src.db.escalation_models import EscalationRunRecord, LawRetestRecord
 from src.db.models import (
     AuditLogRecord,
     CaseSetRecord,
+    CounterexampleClassRecord,
+    CounterexampleFailureKeyRecord,
     CounterexampleRecord,
     EvaluationRecord,
+    FailureClassificationRecord,
+    FailureClusterRecord,
+    FailureKeyRecord,
+    FailureKeySnapshotRecord,
+    LawNoveltyRecord,
     LawRecord,
+    NoveltySnapshotRecord,
+    ObservableProposalRecord,
+    TheoremGenerationArtifactRecord,
+    TheoremRecord,
+    TheoremRunRecord,
     TheoryRecord,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4  # PHASE-D: Reproducibility, typed structures
 
 
 class Repository:
@@ -814,3 +826,1288 @@ class Repository:
             )
             results.append((law, evaluation))
         return results
+
+    # --- Failure classification operations ---
+
+    def insert_failure_classification(
+        self, classification: FailureClassificationRecord
+    ) -> int:
+        """Insert a new failure classification. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO failure_classifications (
+                evaluation_id, law_id, failure_class, counterexample_class_id,
+                is_known_class, confidence, features_json, reasoning, actionable
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                classification.evaluation_id,
+                classification.law_id,
+                classification.failure_class,
+                classification.counterexample_class_id,
+                classification.is_known_class,
+                classification.confidence,
+                classification.features_json,
+                classification.reasoning,
+                classification.actionable,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_failure_classification(
+        self, evaluation_id: int
+    ) -> FailureClassificationRecord | None:
+        """Get failure classification for an evaluation."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM failure_classifications WHERE evaluation_id = ?",
+            (evaluation_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_failure_classification(row)
+
+    def list_failure_classifications(
+        self,
+        failure_class: str | None = None,
+        counterexample_class_id: str | None = None,
+        actionable: bool | None = None,
+        limit: int = 100,
+    ) -> list[FailureClassificationRecord]:
+        """List failure classifications with optional filtering."""
+        cursor = self.conn.cursor()
+        conditions = []
+        params: list[Any] = []
+
+        if failure_class:
+            conditions.append("failure_class = ?")
+            params.append(failure_class)
+        if counterexample_class_id:
+            conditions.append("counterexample_class_id = ?")
+            params.append(counterexample_class_id)
+        if actionable is not None:
+            conditions.append("actionable = ?")
+            params.append(actionable)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        params.append(limit)
+
+        cursor.execute(
+            f"""
+            SELECT * FROM failure_classifications
+            WHERE {where_clause}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        return [self._row_to_failure_classification(row) for row in cursor.fetchall()]
+
+    def get_failure_classification_summary(self) -> dict[str, int]:
+        """Get counts of failures by classification type."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT failure_class, COUNT(*) as count
+            FROM failure_classifications
+            GROUP BY failure_class
+            """
+        )
+        return {row["failure_class"]: row["count"] for row in cursor.fetchall()}
+
+    def get_counterexample_class_counts(self) -> dict[str, int]:
+        """Get counts of counterexamples by class."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT counterexample_class_id, COUNT(*) as count
+            FROM failure_classifications
+            WHERE counterexample_class_id IS NOT NULL
+            GROUP BY counterexample_class_id
+            ORDER BY count DESC
+            """
+        )
+        return {row["counterexample_class_id"]: row["count"] for row in cursor.fetchall()}
+
+    def _row_to_failure_classification(
+        self, row: sqlite3.Row
+    ) -> FailureClassificationRecord:
+        return FailureClassificationRecord(
+            id=row["id"],
+            evaluation_id=row["evaluation_id"],
+            law_id=row["law_id"],
+            failure_class=row["failure_class"],
+            counterexample_class_id=row["counterexample_class_id"],
+            is_known_class=bool(row["is_known_class"]),
+            confidence=row["confidence"],
+            features_json=row["features_json"],
+            reasoning=row["reasoning"],
+            actionable=bool(row["actionable"]),
+            created_at=row["created_at"],
+        )
+
+    # --- Counterexample class registry operations ---
+
+    def upsert_counterexample_class(
+        self, class_record: CounterexampleClassRecord
+    ) -> int:
+        """Insert or update a counterexample class. Returns the ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT id, occurrence_count FROM counterexample_classes WHERE class_id = ?",
+            (class_record.class_id,),
+        )
+        row = cursor.fetchone()
+        if row:
+            # Update existing - increment count, update last_seen
+            new_count = row["occurrence_count"] + 1
+            cursor.execute(
+                """
+                UPDATE counterexample_classes
+                SET occurrence_count = ?, last_seen_at = CURRENT_TIMESTAMP,
+                    description = COALESCE(?, description),
+                    example_state = COALESCE(?, example_state)
+                WHERE class_id = ?
+                """,
+                (
+                    new_count,
+                    class_record.description,
+                    class_record.example_state,
+                    class_record.class_id,
+                ),
+            )
+            self.conn.commit()
+            return row["id"]
+        else:
+            # Insert new
+            cursor.execute(
+                """
+                INSERT INTO counterexample_classes (
+                    class_id, description, example_state, occurrence_count
+                )
+                VALUES (?, ?, ?, 1)
+                """,
+                (
+                    class_record.class_id,
+                    class_record.description,
+                    class_record.example_state,
+                ),
+            )
+            self.conn.commit()
+            return cursor.lastrowid  # type: ignore
+
+    def get_counterexample_class(
+        self, class_id: str
+    ) -> CounterexampleClassRecord | None:
+        """Get a counterexample class by ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM counterexample_classes WHERE class_id = ?",
+            (class_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_counterexample_class(row)
+
+    def list_counterexample_classes(
+        self, limit: int = 100
+    ) -> list[CounterexampleClassRecord]:
+        """List all counterexample classes ordered by occurrence count."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM counterexample_classes
+            ORDER BY occurrence_count DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [self._row_to_counterexample_class(row) for row in cursor.fetchall()]
+
+    def get_known_class_ids(self) -> set[str]:
+        """Get the set of all known counterexample class IDs."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT class_id FROM counterexample_classes")
+        return {row["class_id"] for row in cursor.fetchall()}
+
+    def _row_to_counterexample_class(
+        self, row: sqlite3.Row
+    ) -> CounterexampleClassRecord:
+        return CounterexampleClassRecord(
+            id=row["id"],
+            class_id=row["class_id"],
+            description=row["description"],
+            example_state=row["example_state"],
+            occurrence_count=row["occurrence_count"],
+            first_seen_at=row["first_seen_at"],
+            last_seen_at=row["last_seen_at"],
+        )
+
+    # --- Novelty tracking operations ---
+
+    def insert_law_novelty(self, novelty: LawNoveltyRecord) -> int:
+        """Insert a law novelty record. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO law_novelty (
+                law_id, syntactic_fingerprint, semantic_signature_hash,
+                is_syntactically_novel, is_semantically_novel,
+                is_novel, is_fully_novel, behavior_summary_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                novelty.law_id,
+                novelty.syntactic_fingerprint,
+                novelty.semantic_signature_hash,
+                novelty.is_syntactically_novel,
+                novelty.is_semantically_novel,
+                novelty.is_novel,
+                novelty.is_fully_novel,
+                novelty.behavior_summary_json,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_law_novelty(self, law_id: str) -> LawNoveltyRecord | None:
+        """Get novelty record for a law."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM law_novelty WHERE law_id = ?",
+            (law_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_law_novelty(row)
+
+    def get_syntactic_fingerprints(self) -> set[str]:
+        """Get all known syntactic fingerprints."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT DISTINCT syntactic_fingerprint FROM law_novelty")
+        return {row["syntactic_fingerprint"] for row in cursor.fetchall()}
+
+    def get_semantic_signatures(self) -> set[str]:
+        """Get all known semantic signature hashes."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT semantic_signature_hash FROM law_novelty "
+            "WHERE semantic_signature_hash IS NOT NULL"
+        )
+        return {row["semantic_signature_hash"] for row in cursor.fetchall()}
+
+    def get_novelty_summary(self) -> dict[str, Any]:
+        """Get summary of novelty across all laws."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT
+                COUNT(*) as total_laws,
+                SUM(CASE WHEN is_syntactically_novel THEN 1 ELSE 0 END) as syntactically_novel,
+                SUM(CASE WHEN is_semantically_novel THEN 1 ELSE 0 END) as semantically_novel,
+                SUM(CASE WHEN is_novel THEN 1 ELSE 0 END) as novel_either,
+                SUM(CASE WHEN is_fully_novel THEN 1 ELSE 0 END) as novel_both
+            FROM law_novelty
+            """
+        )
+        row = cursor.fetchone()
+        return {
+            "total_laws": row["total_laws"] or 0,
+            "syntactically_novel": row["syntactically_novel"] or 0,
+            "semantically_novel": row["semantically_novel"] or 0,
+            "novel_either": row["novel_either"] or 0,
+            "novel_both": row["novel_both"] or 0,
+        }
+
+    def list_duplicate_laws(self, by: str = "syntactic", limit: int = 100) -> list[tuple[str, list[str]]]:
+        """List laws grouped by duplicate fingerprint/signature.
+
+        Args:
+            by: "syntactic" or "semantic"
+            limit: Maximum groups to return
+
+        Returns:
+            List of (fingerprint, [law_ids]) tuples for duplicates
+        """
+        cursor = self.conn.cursor()
+        if by == "syntactic":
+            cursor.execute(
+                """
+                SELECT syntactic_fingerprint, GROUP_CONCAT(law_id) as law_ids
+                FROM law_novelty
+                GROUP BY syntactic_fingerprint
+                HAVING COUNT(*) > 1
+                ORDER BY COUNT(*) DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT semantic_signature_hash, GROUP_CONCAT(law_id) as law_ids
+                FROM law_novelty
+                WHERE semantic_signature_hash IS NOT NULL
+                GROUP BY semantic_signature_hash
+                HAVING COUNT(*) > 1
+                ORDER BY COUNT(*) DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+
+        return [
+            (row[0], row[1].split(",")) for row in cursor.fetchall()
+        ]
+
+    def _row_to_law_novelty(self, row: sqlite3.Row) -> LawNoveltyRecord:
+        return LawNoveltyRecord(
+            id=row["id"],
+            law_id=row["law_id"],
+            syntactic_fingerprint=row["syntactic_fingerprint"],
+            semantic_signature_hash=row["semantic_signature_hash"],
+            is_syntactically_novel=bool(row["is_syntactically_novel"]),
+            is_semantically_novel=bool(row["is_semantically_novel"]),
+            is_novel=bool(row["is_novel"]),
+            is_fully_novel=bool(row["is_fully_novel"]),
+            behavior_summary_json=row["behavior_summary_json"],
+            created_at=row["created_at"],
+        )
+
+    # --- Novelty snapshot operations ---
+
+    def insert_novelty_snapshot(self, snapshot: NoveltySnapshotRecord) -> int:
+        """Insert a novelty snapshot. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO novelty_snapshots (
+                window_size, total_laws_in_window,
+                syntactically_novel_count, semantically_novel_count,
+                fully_novel_count, syntactic_novelty_rate,
+                semantic_novelty_rate, combined_novelty_rate,
+                is_saturated, total_laws_seen,
+                unique_syntactic_fingerprints, unique_semantic_signatures
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot.window_size,
+                snapshot.total_laws_in_window,
+                snapshot.syntactically_novel_count,
+                snapshot.semantically_novel_count,
+                snapshot.fully_novel_count,
+                snapshot.syntactic_novelty_rate,
+                snapshot.semantic_novelty_rate,
+                snapshot.combined_novelty_rate,
+                snapshot.is_saturated,
+                snapshot.total_laws_seen,
+                snapshot.unique_syntactic_fingerprints,
+                snapshot.unique_semantic_signatures,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_latest_novelty_snapshot(self) -> NoveltySnapshotRecord | None:
+        """Get the most recent novelty snapshot."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM novelty_snapshots ORDER BY created_at DESC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_novelty_snapshot(row)
+
+    def list_novelty_snapshots(self, limit: int = 100) -> list[NoveltySnapshotRecord]:
+        """List novelty snapshots in reverse chronological order."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM novelty_snapshots ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [self._row_to_novelty_snapshot(row) for row in cursor.fetchall()]
+
+    def get_saturation_history(self) -> list[tuple[str, bool, float]]:
+        """Get history of saturation status.
+
+        Returns:
+            List of (timestamp, is_saturated, combined_novelty_rate) tuples
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT created_at, is_saturated, combined_novelty_rate
+            FROM novelty_snapshots
+            ORDER BY created_at
+            """
+        )
+        return [
+            (row["created_at"], bool(row["is_saturated"]), row["combined_novelty_rate"])
+            for row in cursor.fetchall()
+        ]
+
+    def _row_to_novelty_snapshot(self, row: sqlite3.Row) -> NoveltySnapshotRecord:
+        return NoveltySnapshotRecord(
+            id=row["id"],
+            window_size=row["window_size"],
+            total_laws_in_window=row["total_laws_in_window"],
+            syntactically_novel_count=row["syntactically_novel_count"],
+            semantically_novel_count=row["semantically_novel_count"],
+            fully_novel_count=row["fully_novel_count"],
+            syntactic_novelty_rate=row["syntactic_novelty_rate"],
+            semantic_novelty_rate=row["semantic_novelty_rate"],
+            combined_novelty_rate=row["combined_novelty_rate"],
+            is_saturated=bool(row["is_saturated"]),
+            total_laws_seen=row["total_laws_seen"],
+            unique_syntactic_fingerprints=row["unique_syntactic_fingerprints"],
+            unique_semantic_signatures=row["unique_semantic_signatures"],
+            created_at=row["created_at"],
+        )
+
+    # --- Failure key operations ---
+
+    def upsert_failure_key(self, key: FailureKeyRecord) -> int:
+        """Insert or update a failure key. Returns the ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT id, occurrence_count FROM failure_keys WHERE key_hash = ?",
+            (key.key_hash,),
+        )
+        row = cursor.fetchone()
+        if row:
+            # Update existing - increment count, update last_seen
+            new_count = row["occurrence_count"] + 1
+            cursor.execute(
+                """
+                UPDATE failure_keys
+                SET occurrence_count = ?, last_seen_at = CURRENT_TIMESTAMP
+                WHERE key_hash = ?
+                """,
+                (new_count, key.key_hash),
+            )
+            self.conn.commit()
+            return row["id"]
+        else:
+            # Insert new
+            cursor.execute(
+                """
+                INSERT INTO failure_keys (
+                    key_hash, canonical_initial, canonical_fail_state,
+                    t_fail_relative, observable_signature_json,
+                    trajectory_signature, occurrence_count
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 1)
+                """,
+                (
+                    key.key_hash,
+                    key.canonical_initial,
+                    key.canonical_fail_state,
+                    key.t_fail_relative,
+                    key.observable_signature_json,
+                    key.trajectory_signature,
+                ),
+            )
+            self.conn.commit()
+            return cursor.lastrowid  # type: ignore
+
+    def get_failure_key(self, key_hash: str) -> FailureKeyRecord | None:
+        """Get a failure key by its hash."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM failure_keys WHERE key_hash = ?",
+            (key_hash,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_failure_key(row)
+
+    def get_failure_key_by_id(self, key_id: int) -> FailureKeyRecord | None:
+        """Get a failure key by its database ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM failure_keys WHERE id = ?",
+            (key_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_failure_key(row)
+
+    def list_failure_keys(
+        self,
+        canonical_initial: str | None = None,
+        limit: int = 100,
+    ) -> list[FailureKeyRecord]:
+        """List failure keys, optionally filtered by canonical initial state."""
+        cursor = self.conn.cursor()
+        if canonical_initial:
+            cursor.execute(
+                """
+                SELECT * FROM failure_keys
+                WHERE canonical_initial = ?
+                ORDER BY occurrence_count DESC
+                LIMIT ?
+                """,
+                (canonical_initial, limit),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT * FROM failure_keys
+                ORDER BY occurrence_count DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+        return [self._row_to_failure_key(row) for row in cursor.fetchall()]
+
+    def get_top_failure_patterns(self, limit: int = 10) -> list[FailureKeyRecord]:
+        """Get the most common failure patterns."""
+        return self.list_failure_keys(limit=limit)
+
+    def get_failure_key_counts(self) -> dict[str, int]:
+        """Get occurrence counts for all failure keys."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT key_hash, occurrence_count FROM failure_keys")
+        return {row["key_hash"]: row["occurrence_count"] for row in cursor.fetchall()}
+
+    def _row_to_failure_key(self, row: sqlite3.Row) -> FailureKeyRecord:
+        return FailureKeyRecord(
+            id=row["id"],
+            key_hash=row["key_hash"],
+            canonical_initial=row["canonical_initial"],
+            canonical_fail_state=row["canonical_fail_state"],
+            t_fail_relative=row["t_fail_relative"],
+            observable_signature_json=row["observable_signature_json"],
+            trajectory_signature=row["trajectory_signature"],
+            occurrence_count=row["occurrence_count"],
+            first_seen_at=row["first_seen_at"],
+            last_seen_at=row["last_seen_at"],
+        )
+
+    # --- Counterexample failure key link operations ---
+
+    def insert_counterexample_failure_key(
+        self,
+        link: CounterexampleFailureKeyRecord,
+    ) -> int:
+        """Insert a counterexample-failure key link. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO counterexample_failure_keys (
+                counterexample_id, failure_key_id, law_id, is_novel
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                link.counterexample_id,
+                link.failure_key_id,
+                link.law_id,
+                link.is_novel,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_failure_keys_for_counterexample(
+        self,
+        counterexample_id: int,
+    ) -> list[FailureKeyRecord]:
+        """Get all failure keys for a counterexample."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT fk.* FROM failure_keys fk
+            INNER JOIN counterexample_failure_keys cfk ON fk.id = cfk.failure_key_id
+            WHERE cfk.counterexample_id = ?
+            """,
+            (counterexample_id,),
+        )
+        return [self._row_to_failure_key(row) for row in cursor.fetchall()]
+
+    def get_counterexamples_for_failure_key(
+        self,
+        failure_key_id: int,
+    ) -> list[tuple[CounterexampleFailureKeyRecord, str]]:
+        """Get all counterexample links for a failure key.
+
+        Returns:
+            List of (link_record, law_id) tuples
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM counterexample_failure_keys
+            WHERE failure_key_id = ?
+            ORDER BY created_at DESC
+            """,
+            (failure_key_id,),
+        )
+        return [
+            (
+                CounterexampleFailureKeyRecord(
+                    id=row["id"],
+                    counterexample_id=row["counterexample_id"],
+                    failure_key_id=row["failure_key_id"],
+                    law_id=row["law_id"],
+                    is_novel=bool(row["is_novel"]),
+                    created_at=row["created_at"],
+                ),
+                row["law_id"],
+            )
+            for row in cursor.fetchall()
+        ]
+
+    def get_failure_key_summary(self) -> dict[str, Any]:
+        """Get summary of failure keys."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT
+                COUNT(*) as total_keys,
+                SUM(occurrence_count) as total_occurrences,
+                AVG(occurrence_count) as avg_occurrences,
+                MAX(occurrence_count) as max_occurrences
+            FROM failure_keys
+            """
+        )
+        row = cursor.fetchone()
+        return {
+            "total_keys": row["total_keys"] or 0,
+            "total_occurrences": row["total_occurrences"] or 0,
+            "avg_occurrences": row["avg_occurrences"] or 0,
+            "max_occurrences": row["max_occurrences"] or 0,
+        }
+
+    # --- Failure key snapshot operations ---
+
+    def insert_failure_key_snapshot(
+        self,
+        snapshot: FailureKeySnapshotRecord,
+    ) -> int:
+        """Insert a failure key snapshot. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO failure_key_snapshots (
+                window_size, total_falsifications, unique_failure_keys,
+                new_cex_rate, repetition_rate, total_keys_seen
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot.window_size,
+                snapshot.total_falsifications,
+                snapshot.unique_failure_keys,
+                snapshot.new_cex_rate,
+                snapshot.repetition_rate,
+                snapshot.total_keys_seen,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_latest_failure_key_snapshot(
+        self,
+    ) -> FailureKeySnapshotRecord | None:
+        """Get the most recent failure key snapshot."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM failure_key_snapshots ORDER BY created_at DESC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_failure_key_snapshot(row)
+
+    def list_failure_key_snapshots(
+        self,
+        limit: int = 100,
+    ) -> list[FailureKeySnapshotRecord]:
+        """List failure key snapshots in reverse chronological order."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM failure_key_snapshots ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [self._row_to_failure_key_snapshot(row) for row in cursor.fetchall()]
+
+    def get_new_cex_rate_history(self) -> list[tuple[str, float]]:
+        """Get history of new counterexample rates.
+
+        Returns:
+            List of (timestamp, new_cex_rate) tuples
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT created_at, new_cex_rate
+            FROM failure_key_snapshots
+            ORDER BY created_at
+            """
+        )
+        return [(row["created_at"], row["new_cex_rate"]) for row in cursor.fetchall()]
+
+    def _row_to_failure_key_snapshot(
+        self,
+        row: sqlite3.Row,
+    ) -> FailureKeySnapshotRecord:
+        return FailureKeySnapshotRecord(
+            id=row["id"],
+            window_size=row["window_size"],
+            total_falsifications=row["total_falsifications"],
+            unique_failure_keys=row["unique_failure_keys"],
+            new_cex_rate=row["new_cex_rate"],
+            repetition_rate=row["repetition_rate"],
+            total_keys_seen=row["total_keys_seen"],
+            created_at=row["created_at"],
+        )
+
+    # --- Theorem generation artifact operations (PHASE-D) ---
+
+    def insert_theorem_generation_artifact(
+        self, artifact: TheoremGenerationArtifactRecord
+    ) -> int:
+        """Insert a new theorem generation artifact. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO theorem_generation_artifacts (
+                artifact_hash, snapshot_hash, prompt_template_version,
+                model_name, model_params_json, raw_response, parsed_response_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                artifact.artifact_hash,
+                artifact.snapshot_hash,
+                artifact.prompt_template_version,
+                artifact.model_name,
+                artifact.model_params_json,
+                artifact.raw_response,
+                artifact.parsed_response_json,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_artifact_by_hash(
+        self, artifact_hash: str
+    ) -> TheoremGenerationArtifactRecord | None:
+        """Get a theorem generation artifact by its hash."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM theorem_generation_artifacts WHERE artifact_hash = ?",
+            (artifact_hash,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_artifact(row)
+
+    def get_artifact_by_id(
+        self, artifact_id: int
+    ) -> TheoremGenerationArtifactRecord | None:
+        """Get a theorem generation artifact by its database ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM theorem_generation_artifacts WHERE id = ?",
+            (artifact_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_artifact(row)
+
+    def get_artifacts_by_snapshot_hash(
+        self, snapshot_hash: str, limit: int = 100
+    ) -> list[TheoremGenerationArtifactRecord]:
+        """Get all artifacts for a given snapshot hash."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM theorem_generation_artifacts
+            WHERE snapshot_hash = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (snapshot_hash, limit),
+        )
+        return [self._row_to_artifact(row) for row in cursor.fetchall()]
+
+    def _row_to_artifact(
+        self, row: sqlite3.Row
+    ) -> TheoremGenerationArtifactRecord:
+        return TheoremGenerationArtifactRecord(
+            id=row["id"],
+            artifact_hash=row["artifact_hash"],
+            snapshot_hash=row["snapshot_hash"],
+            prompt_template_version=row["prompt_template_version"],
+            model_name=row["model_name"],
+            model_params_json=row["model_params_json"],
+            raw_response=row["raw_response"],
+            parsed_response_json=row["parsed_response_json"],
+            created_at=row["created_at"],
+        )
+
+    # --- Theorem run operations ---
+
+    def insert_theorem_run(self, run: TheoremRunRecord) -> int:
+        """Insert a new theorem run. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO theorem_runs (
+                run_id, status, config_json, prompt_hash,
+                pass_laws_count, fail_laws_count,
+                theorems_generated, clusters_found, observable_proposals,
+                artifact_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run.run_id,
+                run.status,
+                run.config_json,
+                run.prompt_hash,
+                run.pass_laws_count,
+                run.fail_laws_count,
+                run.theorems_generated,
+                run.clusters_found,
+                run.observable_proposals,
+                run.artifact_id,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def update_theorem_run(
+        self,
+        run_id: str,
+        status: str | None = None,
+        theorems_generated: int | None = None,
+        clusters_found: int | None = None,
+        observable_proposals: int | None = None,
+        prompt_hash: str | None = None,
+        artifact_id: int | None = None,
+        completed_at: str | None = None,
+    ) -> None:
+        """Update a theorem run."""
+        cursor = self.conn.cursor()
+        updates = []
+        params: list[Any] = []
+
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+        if theorems_generated is not None:
+            updates.append("theorems_generated = ?")
+            params.append(theorems_generated)
+        if clusters_found is not None:
+            updates.append("clusters_found = ?")
+            params.append(clusters_found)
+        if observable_proposals is not None:
+            updates.append("observable_proposals = ?")
+            params.append(observable_proposals)
+        if prompt_hash is not None:
+            updates.append("prompt_hash = ?")
+            params.append(prompt_hash)
+        if artifact_id is not None:
+            updates.append("artifact_id = ?")
+            params.append(artifact_id)
+        if completed_at is not None:
+            updates.append("completed_at = ?")
+            params.append(completed_at)
+
+        if not updates:
+            return
+
+        params.append(run_id)
+        cursor.execute(
+            f"UPDATE theorem_runs SET {', '.join(updates)} WHERE run_id = ?",
+            params,
+        )
+        self.conn.commit()
+
+    def get_theorem_run(self, run_id: str) -> TheoremRunRecord | None:
+        """Get a theorem run by run_id."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM theorem_runs WHERE run_id = ?", (run_id,))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_theorem_run(row)
+
+    def get_theorem_run_by_db_id(self, db_id: int) -> TheoremRunRecord | None:
+        """Get a theorem run by database ID."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM theorem_runs WHERE id = ?", (db_id,))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_theorem_run(row)
+
+    def list_theorem_runs(
+        self, status: str | None = None, limit: int = 50
+    ) -> list[TheoremRunRecord]:
+        """List theorem runs, optionally filtered by status."""
+        cursor = self.conn.cursor()
+        if status:
+            cursor.execute(
+                "SELECT * FROM theorem_runs WHERE status = ? ORDER BY started_at DESC LIMIT ?",
+                (status, limit),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM theorem_runs ORDER BY started_at DESC LIMIT ?",
+                (limit,),
+            )
+        return [self._row_to_theorem_run(row) for row in cursor.fetchall()]
+
+    def _row_to_theorem_run(self, row: sqlite3.Row) -> TheoremRunRecord:
+        keys = row.keys()
+        return TheoremRunRecord(
+            id=row["id"],
+            run_id=row["run_id"],
+            status=row["status"],
+            config_json=row["config_json"],
+            prompt_hash=row["prompt_hash"],
+            pass_laws_count=row["pass_laws_count"],
+            fail_laws_count=row["fail_laws_count"],
+            theorems_generated=row["theorems_generated"],
+            clusters_found=row["clusters_found"],
+            observable_proposals=row["observable_proposals"],
+            artifact_id=row["artifact_id"] if "artifact_id" in keys else None,
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+        )
+
+    # --- Theorem operations ---
+
+    def insert_theorem(self, theorem: TheoremRecord) -> int:
+        """Insert a new theorem. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO theorems (
+                theorem_run_id, theorem_id, name, status, claim,
+                support_json, failure_modes_json, missing_structure_json,
+                typed_missing_structure_json, failure_signature_text,
+                failure_signature_hash, role_coded_signature, bucket_tags_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                theorem.theorem_run_id,
+                theorem.theorem_id,
+                theorem.name,
+                theorem.status,
+                theorem.claim,
+                theorem.support_json,
+                theorem.failure_modes_json,
+                theorem.missing_structure_json,
+                theorem.typed_missing_structure_json,
+                theorem.failure_signature_text,
+                theorem.failure_signature_hash,
+                theorem.role_coded_signature,
+                theorem.bucket_tags_json,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_theorem(self, theorem_id: str) -> TheoremRecord | None:
+        """Get a theorem by theorem_id."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM theorems WHERE theorem_id = ?", (theorem_id,))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_theorem(row)
+
+    def list_theorems(
+        self,
+        run_id: int | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[TheoremRecord]:
+        """List theorems with optional filtering."""
+        cursor = self.conn.cursor()
+        conditions = []
+        params: list[Any] = []
+
+        if run_id is not None:
+            conditions.append("theorem_run_id = ?")
+            params.append(run_id)
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        params.append(limit)
+
+        cursor.execute(
+            f"""
+            SELECT * FROM theorems
+            WHERE {where_clause}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        return [self._row_to_theorem(row) for row in cursor.fetchall()]
+
+    def get_theorems_by_run(self, run_id: int) -> list[TheoremRecord]:
+        """Get all theorems for a theorem run."""
+        return self.list_theorems(run_id=run_id, limit=1000)
+
+    def _row_to_theorem(self, row: sqlite3.Row) -> TheoremRecord:
+        keys = row.keys()
+        return TheoremRecord(
+            id=row["id"],
+            theorem_run_id=row["theorem_run_id"],
+            theorem_id=row["theorem_id"],
+            name=row["name"],
+            status=row["status"],
+            claim=row["claim"],
+            support_json=row["support_json"],
+            failure_modes_json=row["failure_modes_json"],
+            missing_structure_json=row["missing_structure_json"],
+            typed_missing_structure_json=row["typed_missing_structure_json"] if "typed_missing_structure_json" in keys else None,
+            failure_signature_text=row["failure_signature_text"],
+            failure_signature_hash=row["failure_signature_hash"],
+            role_coded_signature=row["role_coded_signature"] if "role_coded_signature" in keys else None,
+            bucket_tags_json=row["bucket_tags_json"] if "bucket_tags_json" in keys else None,
+            created_at=row["created_at"],
+        )
+
+    # --- Failure cluster operations ---
+
+    def insert_failure_cluster(self, cluster: FailureClusterRecord) -> int:
+        """Insert a new failure cluster. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO failure_clusters (
+                theorem_run_id, cluster_id, bucket, bucket_tags_json, semantic_cluster_idx,
+                theorem_ids_json, cluster_size, centroid_signature, avg_similarity,
+                top_keywords_json, recommended_action, distance_threshold
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                cluster.theorem_run_id,
+                cluster.cluster_id,
+                cluster.bucket,
+                cluster.bucket_tags_json,
+                cluster.semantic_cluster_idx,
+                cluster.theorem_ids_json,
+                cluster.cluster_size,
+                cluster.centroid_signature,
+                cluster.avg_similarity,
+                cluster.top_keywords_json,
+                cluster.recommended_action,
+                cluster.distance_threshold,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_failure_cluster(self, cluster_id: str) -> FailureClusterRecord | None:
+        """Get a failure cluster by cluster_id."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM failure_clusters WHERE cluster_id = ?",
+            (cluster_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_failure_cluster(row)
+
+    def list_failure_clusters(
+        self,
+        run_id: int | None = None,
+        bucket: str | None = None,
+        limit: int = 100,
+    ) -> list[FailureClusterRecord]:
+        """List failure clusters with optional filtering."""
+        cursor = self.conn.cursor()
+        conditions = []
+        params: list[Any] = []
+
+        if run_id is not None:
+            conditions.append("theorem_run_id = ?")
+            params.append(run_id)
+        if bucket:
+            conditions.append("bucket = ?")
+            params.append(bucket)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        params.append(limit)
+
+        cursor.execute(
+            f"""
+            SELECT * FROM failure_clusters
+            WHERE {where_clause}
+            ORDER BY cluster_size DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        return [self._row_to_failure_cluster(row) for row in cursor.fetchall()]
+
+    def get_clusters_by_run(self, run_id: int) -> list[FailureClusterRecord]:
+        """Get all failure clusters for a theorem run."""
+        return self.list_failure_clusters(run_id=run_id, limit=1000)
+
+    def _row_to_failure_cluster(self, row: sqlite3.Row) -> FailureClusterRecord:
+        keys = row.keys()
+        return FailureClusterRecord(
+            id=row["id"],
+            theorem_run_id=row["theorem_run_id"],
+            cluster_id=row["cluster_id"],
+            bucket=row["bucket"],
+            semantic_cluster_idx=row["semantic_cluster_idx"],
+            theorem_ids_json=row["theorem_ids_json"],
+            cluster_size=row["cluster_size"],
+            centroid_signature=row["centroid_signature"],
+            avg_similarity=row["avg_similarity"],
+            bucket_tags_json=row["bucket_tags_json"] if "bucket_tags_json" in keys else None,
+            top_keywords_json=row["top_keywords_json"] if "top_keywords_json" in keys else None,
+            recommended_action=row["recommended_action"] if "recommended_action" in keys else None,
+            distance_threshold=row["distance_threshold"] if "distance_threshold" in keys else None,
+            created_at=row["created_at"],
+        )
+
+    # --- Observable proposal operations ---
+
+    def insert_observable_proposal(self, proposal: ObservableProposalRecord) -> int:
+        """Insert a new observable proposal. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO observable_proposals (
+                theorem_run_id, cluster_id, proposal_id,
+                observable_name, observable_expr, rationale, priority, action_type, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                proposal.theorem_run_id,
+                proposal.cluster_id,
+                proposal.proposal_id,
+                proposal.observable_name,
+                proposal.observable_expr,
+                proposal.rationale,
+                proposal.priority,
+                proposal.action_type,
+                proposal.status,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_observable_proposal(
+        self, proposal_id: str
+    ) -> ObservableProposalRecord | None:
+        """Get an observable proposal by proposal_id."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM observable_proposals WHERE proposal_id = ?",
+            (proposal_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_observable_proposal(row)
+
+    def list_observable_proposals(
+        self,
+        run_id: int | None = None,
+        cluster_id: str | None = None,
+        priority: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[ObservableProposalRecord]:
+        """List observable proposals with optional filtering."""
+        cursor = self.conn.cursor()
+        conditions = []
+        params: list[Any] = []
+
+        if run_id is not None:
+            conditions.append("theorem_run_id = ?")
+            params.append(run_id)
+        if cluster_id:
+            conditions.append("cluster_id = ?")
+            params.append(cluster_id)
+        if priority:
+            conditions.append("priority = ?")
+            params.append(priority)
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        params.append(limit)
+
+        cursor.execute(
+            f"""
+            SELECT * FROM observable_proposals
+            WHERE {where_clause}
+            ORDER BY
+                CASE priority
+                    WHEN 'high' THEN 1
+                    WHEN 'medium' THEN 2
+                    WHEN 'low' THEN 3
+                END,
+                created_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        return [self._row_to_observable_proposal(row) for row in cursor.fetchall()]
+
+    def get_proposals_by_run(self, run_id: int) -> list[ObservableProposalRecord]:
+        """Get all observable proposals for a theorem run."""
+        return self.list_observable_proposals(run_id=run_id, limit=1000)
+
+    def update_observable_proposal_status(
+        self, proposal_id: str, status: str
+    ) -> None:
+        """Update the status of an observable proposal."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE observable_proposals SET status = ? WHERE proposal_id = ?",
+            (status, proposal_id),
+        )
+        self.conn.commit()
+
+    def _row_to_observable_proposal(
+        self, row: sqlite3.Row
+    ) -> ObservableProposalRecord:
+        keys = row.keys()
+        return ObservableProposalRecord(
+            id=row["id"],
+            theorem_run_id=row["theorem_run_id"],
+            cluster_id=row["cluster_id"],
+            proposal_id=row["proposal_id"],
+            observable_name=row["observable_name"],
+            observable_expr=row["observable_expr"],
+            rationale=row["rationale"],
+            priority=row["priority"],
+            action_type=row["action_type"] if "action_type" in keys else None,
+            status=row["status"],
+            created_at=row["created_at"],
+        )

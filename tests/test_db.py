@@ -8,8 +8,10 @@ import pytest
 
 from src.db.models import (
     CaseSetRecord,
+    CounterexampleClassRecord,
     CounterexampleRecord,
     EvaluationRecord,
+    FailureClassificationRecord,
     LawRecord,
 )
 from src.db.repo import Repository
@@ -257,3 +259,203 @@ class TestContextManager:
             assert law is not None
 
         db_path.unlink()
+
+
+class TestFailureClassificationOperations:
+    """Tests for failure classification persistence."""
+
+    def test_insert_and_get_failure_classification(self, repo):
+        """Insert and retrieve a failure classification."""
+        repo.insert_law(LawRecord("fc_law", "h1", "invariant", "{}"))
+        eval_id = repo.insert_evaluation(EvaluationRecord(
+            "fc_law", "h1", "FAIL", "c1", "s1", 50, 50
+        ))
+
+        fc = FailureClassificationRecord(
+            evaluation_id=eval_id,
+            law_id="fc_law",
+            failure_class="type_b_novel_counterexample",
+            counterexample_class_id="converging_pair",
+            is_known_class=False,
+            confidence=0.95,
+            features_json='{"grid_length": 3}',
+            reasoning="Contains converging pair pattern",
+            actionable=False,
+        )
+        fc_id = repo.insert_failure_classification(fc)
+        assert fc_id is not None
+
+        retrieved = repo.get_failure_classification(eval_id)
+        assert retrieved is not None
+        assert retrieved.failure_class == "type_b_novel_counterexample"
+        assert retrieved.counterexample_class_id == "converging_pair"
+        assert retrieved.is_known_class is False
+        assert retrieved.confidence == 0.95
+
+    def test_list_failure_classifications_by_class(self, repo):
+        """List failure classifications filtered by failure class."""
+        repo.insert_law(LawRecord("fc_law1", "h1", "invariant", "{}"))
+        repo.insert_law(LawRecord("fc_law2", "h2", "invariant", "{}"))
+
+        eval_id1 = repo.insert_evaluation(EvaluationRecord(
+            "fc_law1", "h1", "FAIL", "c1", "s1", 50, 50
+        ))
+        eval_id2 = repo.insert_evaluation(EvaluationRecord(
+            "fc_law2", "h2", "UNKNOWN", "c1", "s1", 10, 5
+        ))
+
+        repo.insert_failure_classification(FailureClassificationRecord(
+            evaluation_id=eval_id1,
+            law_id="fc_law1",
+            failure_class="type_b_novel_counterexample",
+            is_known_class=False,
+            actionable=False,
+        ))
+        repo.insert_failure_classification(FailureClassificationRecord(
+            evaluation_id=eval_id2,
+            law_id="fc_law2",
+            failure_class="type_c_process_issue",
+            is_known_class=False,
+            actionable=True,
+        ))
+
+        type_b = repo.list_failure_classifications(
+            failure_class="type_b_novel_counterexample"
+        )
+        assert len(type_b) == 1
+        assert type_b[0].law_id == "fc_law1"
+
+        actionable = repo.list_failure_classifications(actionable=True)
+        assert len(actionable) == 1
+        assert actionable[0].law_id == "fc_law2"
+
+    def test_failure_classification_summary(self, repo):
+        """Get summary counts by failure class."""
+        repo.insert_law(LawRecord("sum_fc1", "h1", "invariant", "{}"))
+        repo.insert_law(LawRecord("sum_fc2", "h2", "invariant", "{}"))
+        repo.insert_law(LawRecord("sum_fc3", "h3", "invariant", "{}"))
+
+        eval_id1 = repo.insert_evaluation(EvaluationRecord(
+            "sum_fc1", "h1", "FAIL", "c1", "s1", 50, 50
+        ))
+        eval_id2 = repo.insert_evaluation(EvaluationRecord(
+            "sum_fc2", "h2", "FAIL", "c1", "s1", 50, 50
+        ))
+        eval_id3 = repo.insert_evaluation(EvaluationRecord(
+            "sum_fc3", "h3", "UNKNOWN", "c1", "s1", 10, 5
+        ))
+
+        repo.insert_failure_classification(FailureClassificationRecord(
+            eval_id1, "sum_fc1", "type_a_known_counterexample", False, False
+        ))
+        repo.insert_failure_classification(FailureClassificationRecord(
+            eval_id2, "sum_fc2", "type_a_known_counterexample", False, False
+        ))
+        repo.insert_failure_classification(FailureClassificationRecord(
+            eval_id3, "sum_fc3", "type_c_process_issue", False, True
+        ))
+
+        summary = repo.get_failure_classification_summary()
+        assert summary.get("type_a_known_counterexample", 0) == 2
+        assert summary.get("type_c_process_issue", 0) == 1
+
+    def test_counterexample_class_counts(self, repo):
+        """Get counts by counterexample class."""
+        repo.insert_law(LawRecord("cc_law1", "h1", "invariant", "{}"))
+        repo.insert_law(LawRecord("cc_law2", "h2", "invariant", "{}"))
+        repo.insert_law(LawRecord("cc_law3", "h3", "invariant", "{}"))
+
+        eval_id1 = repo.insert_evaluation(EvaluationRecord(
+            "cc_law1", "h1", "FAIL", "c1", "s1", 50, 50
+        ))
+        eval_id2 = repo.insert_evaluation(EvaluationRecord(
+            "cc_law2", "h2", "FAIL", "c1", "s1", 50, 50
+        ))
+        eval_id3 = repo.insert_evaluation(EvaluationRecord(
+            "cc_law3", "h3", "FAIL", "c1", "s1", 50, 50
+        ))
+
+        repo.insert_failure_classification(FailureClassificationRecord(
+            eval_id1, "cc_law1", "type_a_known_counterexample", False, False,
+            counterexample_class_id="converging_pair"
+        ))
+        repo.insert_failure_classification(FailureClassificationRecord(
+            eval_id2, "cc_law2", "type_a_known_counterexample", False, False,
+            counterexample_class_id="converging_pair"
+        ))
+        repo.insert_failure_classification(FailureClassificationRecord(
+            eval_id3, "cc_law3", "type_b_novel_counterexample", False, False,
+            counterexample_class_id="x_emission"
+        ))
+
+        counts = repo.get_counterexample_class_counts()
+        assert counts.get("converging_pair", 0) == 2
+        assert counts.get("x_emission", 0) == 1
+
+
+class TestCounterexampleClassRegistry:
+    """Tests for counterexample class registry persistence."""
+
+    def test_upsert_counterexample_class(self, repo):
+        """Insert and update counterexample classes."""
+        class_record = CounterexampleClassRecord(
+            class_id="converging_pair",
+            description="Two particles converging: >.<",
+            example_state=">.<",
+        )
+        class_id = repo.upsert_counterexample_class(class_record)
+        assert class_id is not None
+
+        retrieved = repo.get_counterexample_class("converging_pair")
+        assert retrieved is not None
+        assert retrieved.occurrence_count == 1
+        assert retrieved.description == "Two particles converging: >.<"
+
+        # Upsert again - should increment count
+        repo.upsert_counterexample_class(CounterexampleClassRecord(
+            class_id="converging_pair"
+        ))
+        retrieved = repo.get_counterexample_class("converging_pair")
+        assert retrieved.occurrence_count == 2
+
+    def test_list_counterexample_classes(self, repo):
+        """List classes ordered by occurrence count."""
+        repo.upsert_counterexample_class(CounterexampleClassRecord(
+            class_id="x_emission", description="X particle emission"
+        ))
+        repo.upsert_counterexample_class(CounterexampleClassRecord(
+            class_id="converging_pair", description="Converging pair"
+        ))
+        # Increment converging_pair twice
+        repo.upsert_counterexample_class(CounterexampleClassRecord(
+            class_id="converging_pair"
+        ))
+        repo.upsert_counterexample_class(CounterexampleClassRecord(
+            class_id="converging_pair"
+        ))
+
+        classes = repo.list_counterexample_classes()
+        assert len(classes) == 2
+        # Should be ordered by count descending
+        assert classes[0].class_id == "converging_pair"
+        assert classes[0].occurrence_count == 3
+        assert classes[1].class_id == "x_emission"
+        assert classes[1].occurrence_count == 1
+
+    def test_get_known_class_ids(self, repo):
+        """Get set of known class IDs."""
+        repo.upsert_counterexample_class(CounterexampleClassRecord(
+            class_id="converging_pair"
+        ))
+        repo.upsert_counterexample_class(CounterexampleClassRecord(
+            class_id="x_emission"
+        ))
+        repo.upsert_counterexample_class(CounterexampleClassRecord(
+            class_id="high_density"
+        ))
+
+        known = repo.get_known_class_ids()
+        assert "converging_pair" in known
+        assert "x_emission" in known
+        assert "high_density" in known
+        assert len(known) == 3
