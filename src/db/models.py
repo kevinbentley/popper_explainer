@@ -299,3 +299,42 @@ class ObservableProposalRecord:
     status: str = "proposed"
     id: int | None = None
     created_at: datetime | None = None
+
+
+# =============================================================================
+# PHASE-E: Cluster artifacts and law witnesses
+# =============================================================================
+
+
+@dataclass
+class ClusterArtifactRecord:
+    """A cluster artifact for reproducibility tracking (PHASE-E)."""
+
+    artifact_hash: str
+    snapshot_hash: str
+    signature_version: str
+    method: str
+    params_json: str
+    assignments_json: str
+    cluster_summaries_json: str
+    theorem_run_id: int | None = None
+    id: int | None = None
+    created_at: datetime | None = None
+
+
+@dataclass
+class LawWitnessRecord:
+    """A structured witness for a FAIL verdict (PHASE-E)."""
+
+    law_id: str
+    evaluation_id: int
+    t_fail: int
+    formatted_witness: str
+    state_at_t: str
+    neighborhood_hash: str
+    state_at_t1: str | None = None
+    observables_at_t_json: str | None = None
+    observables_at_t1_json: str | None = None
+    is_primary: bool = False
+    id: int | None = None
+    created_at: datetime | None = None

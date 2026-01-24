@@ -1,5 +1,5 @@
 -- Popper Explainer Database Schema
--- Version: 4 (PHASE-D: Reproducibility, typed structures, observable glossary)
+-- Version: 5 (PHASE-E: Deterministic clustering, witness capture, signature versioning)
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -382,3 +382,49 @@ CREATE INDEX IF NOT EXISTS idx_observable_proposals_cluster ON observable_propos
 CREATE INDEX IF NOT EXISTS idx_observable_proposals_priority ON observable_proposals(priority);
 CREATE INDEX IF NOT EXISTS idx_observable_proposals_status ON observable_proposals(status);
 CREATE INDEX IF NOT EXISTS idx_observable_proposals_action ON observable_proposals(action_type);
+
+-- =============================================================================
+-- PHASE-E: Deterministic clustering, witness capture, signature versioning
+-- =============================================================================
+
+-- Cluster artifacts: reproducibility tracking for clustering runs
+CREATE TABLE IF NOT EXISTS cluster_artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_hash TEXT UNIQUE NOT NULL,
+    theorem_run_id INTEGER,
+    snapshot_hash TEXT NOT NULL,
+    signature_version TEXT NOT NULL,
+    method TEXT NOT NULL,
+    params_json TEXT NOT NULL,
+    assignments_json TEXT NOT NULL,
+    cluster_summaries_json TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (theorem_run_id) REFERENCES theorem_runs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cluster_artifacts_hash ON cluster_artifacts(artifact_hash);
+CREATE INDEX IF NOT EXISTS idx_cluster_artifacts_snapshot ON cluster_artifacts(snapshot_hash);
+CREATE INDEX IF NOT EXISTS idx_cluster_artifacts_run ON cluster_artifacts(theorem_run_id);
+
+-- Law witnesses: structured witnesses for FAIL verdicts
+CREATE TABLE IF NOT EXISTS law_witnesses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    law_id TEXT NOT NULL,
+    evaluation_id INTEGER NOT NULL,
+    t_fail INTEGER NOT NULL,
+    formatted_witness TEXT NOT NULL,
+    state_at_t TEXT NOT NULL,
+    state_at_t1 TEXT,
+    observables_at_t_json TEXT,
+    observables_at_t1_json TEXT,
+    neighborhood_hash TEXT NOT NULL,
+    is_primary BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (law_id) REFERENCES laws(law_id),
+    FOREIGN KEY (evaluation_id) REFERENCES evaluations(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_law_witnesses_law ON law_witnesses(law_id);
+CREATE INDEX IF NOT EXISTS idx_law_witnesses_eval ON law_witnesses(evaluation_id);
+CREATE INDEX IF NOT EXISTS idx_law_witnesses_neighborhood ON law_witnesses(neighborhood_hash);
+CREATE INDEX IF NOT EXISTS idx_law_witnesses_primary ON law_witnesses(is_primary);

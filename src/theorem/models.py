@@ -230,6 +230,7 @@ class Theorem:
     missing_structure: list[str] = field(default_factory=list)
     typed_missing_structure: list[TypedMissingStructure] = field(default_factory=list)
     bucket_tags: list[str] = field(default_factory=list)
+    signature_version: str | None = None  # PHASE-E: Track signature format version
 
     def __post_init__(self) -> None:
         """Auto-populate typed_missing_structure from missing_structure if empty."""
@@ -249,6 +250,7 @@ class Theorem:
             "missing_structure": self.missing_structure,
             "typed_missing_structure": [tms.to_dict() for tms in self.typed_missing_structure],
             "bucket_tags": self.bucket_tags,
+            "signature_version": self.signature_version,
         }
 
     @classmethod
@@ -272,6 +274,7 @@ class Theorem:
             missing_structure=data.get("missing_structure", []),
             typed_missing_structure=typed_ms,
             bucket_tags=data.get("bucket_tags", []),
+            signature_version=data.get("signature_version"),
         )
 
 

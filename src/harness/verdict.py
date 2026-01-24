@@ -51,6 +51,10 @@ class Counterexample:
         observables_at_fail: Observable values at failure time
         witness: Additional witness data
         minimized: Whether this has been minimized
+        formatted_witness: PHASE-E human-readable witness string
+        observables_at_t: PHASE-E observables at t_fail
+        observables_at_t1: PHASE-E observables at t_fail+1
+        neighborhood_hash: PHASE-E hash for diversity tracking
     """
 
     initial_state: str
@@ -62,6 +66,11 @@ class Counterexample:
     observables_at_fail: dict[str, int] | None = None
     witness: dict[str, Any] | None = None
     minimized: bool = False
+    # PHASE-E: Formatted witness fields
+    formatted_witness: str | None = None
+    observables_at_t: dict[str, Any] | None = None
+    observables_at_t1: dict[str, Any] | None = None
+    neighborhood_hash: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -75,6 +84,10 @@ class Counterexample:
             "observables_at_fail": self.observables_at_fail,
             "witness": self.witness,
             "minimized": self.minimized,
+            "formatted_witness": self.formatted_witness,
+            "observables_at_t": self.observables_at_t,
+            "observables_at_t1": self.observables_at_t1,
+            "neighborhood_hash": self.neighborhood_hash,
         }
 
     @classmethod
@@ -90,6 +103,10 @@ class Counterexample:
             observables_at_fail=data.get("observables_at_fail"),
             witness=data.get("witness"),
             minimized=data.get("minimized", False),
+            formatted_witness=data.get("formatted_witness"),
+            observables_at_t=data.get("observables_at_t"),
+            observables_at_t1=data.get("observables_at_t1"),
+            neighborhood_hash=data.get("neighborhood_hash"),
         )
 
 

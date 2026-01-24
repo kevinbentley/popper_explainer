@@ -14,7 +14,8 @@ from typing import Any
 
 from src.claims.compiler import CompilationError
 from src.claims.schema import CandidateLaw, Template
-from src.db.models import CaseSetRecord, CounterexampleRecord, EvaluationRecord
+from src.claims.vacuity import VacuityReport
+from src.db.models import CaseSetRecord, CounterexampleRecord, EvaluationRecord, LawWitnessRecord
 from src.db.repo import Repository
 from src.harness.adversarial import AdversarialSearcher
 from src.harness.case import Case, CaseResult
@@ -23,8 +24,8 @@ from src.harness.evaluator import Evaluator, compute_density, has_collision, has
 from src.harness.generators import GeneratorRegistry
 from src.harness.minimizer import Minimizer
 from src.harness.power import PowerMetrics
-from src.claims.vacuity import VacuityReport
 from src.harness.verdict import Counterexample, FailureType, LawVerdict, ReasonCode
+from src.harness.witness import build_formatted_witness, compute_neighborhood_hash
 from src.universe.simulator import version_hash as sim_version_hash
 from src.universe.transforms import list_transforms
 from src.universe.validation import is_valid_initial_state
@@ -129,7 +130,7 @@ class Harness:
             # Check for failure
             if not result.passed and result.precondition_met:
                 # Found a counterexample
-                counterexample = self._create_counterexample(result, time_horizon)
+                counterexample = self._create_counterexample(law, result, time_horizon)
                 break
 
         # Run adversarial search if enabled and no counterexample yet
@@ -334,15 +335,38 @@ class Harness:
         return {}
 
     def _create_counterexample(
-        self, result: CaseResult, time_horizon: int
+        self, law: CandidateLaw, result: CaseResult, time_horizon: int
     ) -> Counterexample:
-        """Create a counterexample from a failed case result."""
+        """Create a counterexample from a failed case result.
+
+        PHASE-E: Now includes formatted witness for human readability.
+        """
         t_fail = result.violation.get("t", 0) if result.violation else 0
 
         # Extract trajectory excerpt around failure
         excerpt_start = max(0, t_fail - 2)
         excerpt_end = min(len(result.trajectory), t_fail + 3)
         trajectory_excerpt = result.trajectory[excerpt_start:excerpt_end]
+
+        # PHASE-E: Build formatted witness
+        formatted_witness = build_formatted_witness(
+            law=law,
+            trajectory=result.trajectory,
+            t_fail=t_fail,
+            violation=result.violation,
+            observables_at_t=result.violation.get("details") if result.violation else None,
+        )
+
+        # Extract position from violation if available (for neighborhood hash)
+        position = None
+        if result.violation and "details" in result.violation:
+            details = result.violation["details"]
+            if isinstance(details, dict):
+                position = details.get("position", details.get("i"))
+
+        # Compute observables at t and t+1
+        state_at_t = result.trajectory[t_fail] if t_fail < len(result.trajectory) else ""
+        state_at_t1 = result.trajectory[t_fail + 1] if t_fail + 1 < len(result.trajectory) else None
 
         return Counterexample(
             initial_state=result.case.initial_state,
@@ -357,6 +381,11 @@ class Harness:
             observables_at_fail=result.violation.get("details") if result.violation else None,
             witness=result.violation,
             minimized=False,
+            # PHASE-E: New witness fields
+            formatted_witness=str(formatted_witness),
+            observables_at_t=formatted_witness.observables_at_t,
+            observables_at_t1=formatted_witness.observables_at_t1,
+            neighborhood_hash=formatted_witness.neighborhood_hash,
         )
 
     def _determine_verdict(
@@ -642,6 +671,30 @@ class Harness:
                 minimized=verdict.counterexample.minimized,
             )
             self.repo.insert_counterexample(cx_record)
+
+            # PHASE-E: Store formatted witness
+            if verdict.counterexample.formatted_witness:
+                witness_record = LawWitnessRecord(
+                    law_id=law.law_id,
+                    evaluation_id=eval_id,
+                    t_fail=verdict.counterexample.t_fail,
+                    formatted_witness=verdict.counterexample.formatted_witness,
+                    state_at_t=verdict.counterexample.trajectory_excerpt[0]
+                    if verdict.counterexample.trajectory_excerpt
+                    else verdict.counterexample.initial_state,
+                    state_at_t1=verdict.counterexample.trajectory_excerpt[1]
+                    if verdict.counterexample.trajectory_excerpt and len(verdict.counterexample.trajectory_excerpt) > 1
+                    else None,
+                    observables_at_t_json=json.dumps(verdict.counterexample.observables_at_t)
+                    if verdict.counterexample.observables_at_t
+                    else None,
+                    observables_at_t1_json=json.dumps(verdict.counterexample.observables_at_t1)
+                    if verdict.counterexample.observables_at_t1
+                    else None,
+                    neighborhood_hash=verdict.counterexample.neighborhood_hash or "",
+                    is_primary=True,
+                )
+                self.repo.insert_law_witness(witness_record)
 
         # Audit log
         self.repo.log_audit(

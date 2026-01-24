@@ -8,9 +8,14 @@ PHASE-C updates:
 - TF-IDF + cosine distance clustering (replaces Jaccard)
 - Top keyword extraction per cluster
 - Action mapping (SCHEMA_FIX, OBSERVABLE, GATING)
+
+PHASE-E updates:
+- Deterministic cluster IDs (content-based, not UUID)
+- Signature version validation support
 """
 
-import uuid
+import hashlib
+import json
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
@@ -25,6 +30,25 @@ from src.theorem.signature import (
     build_failure_signature,
     extract_key_terms,
 )
+
+
+def _generate_cluster_id(bucket: str, cluster_idx: int, theorem_ids: list[str]) -> str:
+    """Generate a deterministic cluster ID from bucket, index, and content.
+
+    PHASE-E: Replaces uuid.uuid4() with content-based hash for reproducibility.
+
+    Args:
+        bucket: The primary bucket name
+        cluster_idx: Index within the bucket
+        theorem_ids: List of theorem IDs in this cluster (used for content hash)
+
+    Returns:
+        Deterministic cluster ID: fc_{bucket}_{idx}_{content_hash[:8]}
+    """
+    # Compute content hash from sorted theorem IDs
+    content = json.dumps(sorted(theorem_ids), sort_keys=True)
+    content_hash = hashlib.sha256(content.encode()).hexdigest()
+    return f"fc_{bucket}_{cluster_idx}_{content_hash[:8]}"
 
 
 # PHASE-C bucket keywords (refined taxonomy)
@@ -209,12 +233,13 @@ class TfidfClusterer:
             theorem, signature, tags = items[0]
             bucket_tags = sorted(tags)
             action = self.action_mapper.get_action(tags)
+            theorem_ids = [theorem.theorem_id]
             return [
                 FailureCluster(
-                    cluster_id=f"fc_{bucket_name}_0_{uuid.uuid4().hex[:8]}",
+                    cluster_id=_generate_cluster_id(bucket_name, 0, theorem_ids),
                     bucket_tags=bucket_tags,
                     semantic_cluster_idx=0,
-                    theorem_ids=[theorem.theorem_id],
+                    theorem_ids=theorem_ids,
                     centroid_signature=signature,
                     avg_similarity=1.0,
                     top_keywords=self._extract_simple_keywords(signature),
@@ -242,12 +267,13 @@ class TfidfClusterer:
                 all_tags.update(tags)
             bucket_tags = sorted(all_tags)
             action = self.action_mapper.get_action(all_tags)
+            theorem_ids = [item[0].theorem_id for item in items]
             return [
                 FailureCluster(
-                    cluster_id=f"fc_{bucket_name}_0_{uuid.uuid4().hex[:8]}",
+                    cluster_id=_generate_cluster_id(bucket_name, 0, theorem_ids),
                     bucket_tags=bucket_tags,
                     semantic_cluster_idx=0,
-                    theorem_ids=[item[0].theorem_id for item in items],
+                    theorem_ids=theorem_ids,
                     centroid_signature=" ".join(signatures),
                     avg_similarity=1.0,
                     top_keywords=[],
@@ -305,7 +331,7 @@ class TfidfClusterer:
             action = self.action_mapper.get_action(all_tags, [kw for kw, _ in top_keywords])
 
             cluster = FailureCluster(
-                cluster_id=f"fc_{bucket_name}_{cluster_idx}_{uuid.uuid4().hex[:8]}",
+                cluster_id=_generate_cluster_id(bucket_name, cluster_idx, theorem_ids),
                 bucket_tags=bucket_tags,
                 semantic_cluster_idx=cluster_idx,
                 theorem_ids=theorem_ids,

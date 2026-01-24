@@ -6,6 +6,33 @@ import re
 from src.theorem.models import MissingStructureType, SupportRole, Theorem
 
 
+# =============================================================================
+# Signature Version Tracking (PHASE-E)
+# =============================================================================
+# Version history:
+# 1.0.0 - Initial role-coded signatures (C:, X:, R:, DEF:, LOC:, TMP:, MEC:, FM:)
+#         Introduced in PHASE-D for improved clustering precision.
+
+ROLE_CODED_SIGNATURE_VERSION = "1.0.0"
+
+
+class SignatureVersionMismatchError(Exception):
+    """Raised when clustering encounters theorems with incompatible signature versions."""
+
+    def __init__(
+        self,
+        expected_version: str,
+        mismatched_theorems: list[tuple[str, str | None]],
+    ):
+        self.expected_version = expected_version
+        self.mismatched_theorems = mismatched_theorems
+        theorem_ids = [t[0] for t in mismatched_theorems[:5]]
+        super().__init__(
+            f"Signature version mismatch: expected {expected_version}, "
+            f"found mismatched theorems: {theorem_ids}"
+        )
+
+
 def normalize_text(text: str) -> str:
     """Normalize text for signature comparison.
 

@@ -9,6 +9,7 @@ from src.db.escalation_models import EscalationRunRecord, LawRetestRecord
 from src.db.models import (
     AuditLogRecord,
     CaseSetRecord,
+    ClusterArtifactRecord,
     CounterexampleClassRecord,
     CounterexampleFailureKeyRecord,
     CounterexampleRecord,
@@ -19,6 +20,7 @@ from src.db.models import (
     FailureKeySnapshotRecord,
     LawNoveltyRecord,
     LawRecord,
+    LawWitnessRecord,
     NoveltySnapshotRecord,
     ObservableProposalRecord,
     TheoremGenerationArtifactRecord,
@@ -27,7 +29,7 @@ from src.db.models import (
     TheoryRecord,
 )
 
-SCHEMA_VERSION = 4  # PHASE-D: Reproducibility, typed structures
+SCHEMA_VERSION = 5  # PHASE-E: Deterministic clustering, witness capture
 
 
 class Repository:
@@ -2109,5 +2111,214 @@ class Repository:
             priority=row["priority"],
             action_type=row["action_type"] if "action_type" in keys else None,
             status=row["status"],
+            created_at=row["created_at"],
+        )
+
+    # --- Cluster artifact operations (PHASE-E) ---
+
+    def insert_cluster_artifact(self, artifact: ClusterArtifactRecord) -> int:
+        """Insert a new cluster artifact. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO cluster_artifacts (
+                artifact_hash, theorem_run_id, snapshot_hash, signature_version,
+                method, params_json, assignments_json, cluster_summaries_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                artifact.artifact_hash,
+                artifact.theorem_run_id,
+                artifact.snapshot_hash,
+                artifact.signature_version,
+                artifact.method,
+                artifact.params_json,
+                artifact.assignments_json,
+                artifact.cluster_summaries_json,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_cluster_artifact_by_hash(
+        self, artifact_hash: str
+    ) -> ClusterArtifactRecord | None:
+        """Get a cluster artifact by its hash."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM cluster_artifacts WHERE artifact_hash = ?",
+            (artifact_hash,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_cluster_artifact(row)
+
+    def get_cluster_artifact_by_id(
+        self, artifact_id: int
+    ) -> ClusterArtifactRecord | None:
+        """Get a cluster artifact by its database ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM cluster_artifacts WHERE id = ?",
+            (artifact_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_cluster_artifact(row)
+
+    def get_cluster_artifacts_by_run(
+        self, theorem_run_id: int, limit: int = 100
+    ) -> list[ClusterArtifactRecord]:
+        """Get all cluster artifacts for a theorem run."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM cluster_artifacts
+            WHERE theorem_run_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (theorem_run_id, limit),
+        )
+        return [self._row_to_cluster_artifact(row) for row in cursor.fetchall()]
+
+    def list_cluster_artifacts(
+        self, limit: int = 100
+    ) -> list[ClusterArtifactRecord]:
+        """List cluster artifacts in reverse chronological order."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM cluster_artifacts ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [self._row_to_cluster_artifact(row) for row in cursor.fetchall()]
+
+    def _row_to_cluster_artifact(
+        self, row: sqlite3.Row
+    ) -> ClusterArtifactRecord:
+        return ClusterArtifactRecord(
+            id=row["id"],
+            artifact_hash=row["artifact_hash"],
+            theorem_run_id=row["theorem_run_id"],
+            snapshot_hash=row["snapshot_hash"],
+            signature_version=row["signature_version"],
+            method=row["method"],
+            params_json=row["params_json"],
+            assignments_json=row["assignments_json"],
+            cluster_summaries_json=row["cluster_summaries_json"],
+            created_at=row["created_at"],
+        )
+
+    # --- Law witness operations (PHASE-E) ---
+
+    def insert_law_witness(self, witness: LawWitnessRecord) -> int:
+        """Insert a new law witness. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO law_witnesses (
+                law_id, evaluation_id, t_fail, formatted_witness,
+                state_at_t, state_at_t1, observables_at_t_json,
+                observables_at_t1_json, neighborhood_hash, is_primary
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                witness.law_id,
+                witness.evaluation_id,
+                witness.t_fail,
+                witness.formatted_witness,
+                witness.state_at_t,
+                witness.state_at_t1,
+                witness.observables_at_t_json,
+                witness.observables_at_t1_json,
+                witness.neighborhood_hash,
+                witness.is_primary,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_witnesses_for_law(
+        self, law_id: str, limit: int = 20
+    ) -> list[LawWitnessRecord]:
+        """Get witnesses for a law, primary witness first."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM law_witnesses
+            WHERE law_id = ?
+            ORDER BY is_primary DESC, created_at ASC
+            LIMIT ?
+            """,
+            (law_id, limit),
+        )
+        return [self._row_to_law_witness(row) for row in cursor.fetchall()]
+
+    def get_witnesses_for_evaluation(
+        self, evaluation_id: int, limit: int = 20
+    ) -> list[LawWitnessRecord]:
+        """Get witnesses for a specific evaluation."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM law_witnesses
+            WHERE evaluation_id = ?
+            ORDER BY is_primary DESC, created_at ASC
+            LIMIT ?
+            """,
+            (evaluation_id, limit),
+        )
+        return [self._row_to_law_witness(row) for row in cursor.fetchall()]
+
+    def get_primary_witness_for_law(
+        self, law_id: str
+    ) -> LawWitnessRecord | None:
+        """Get the primary witness for a law."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM law_witnesses
+            WHERE law_id = ? AND is_primary = TRUE
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (law_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_law_witness(row)
+
+    def get_witness_diversity(self, law_id: str) -> int:
+        """Get the count of unique neighborhood hashes for a law's witnesses."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT COUNT(DISTINCT neighborhood_hash) as diversity
+            FROM law_witnesses
+            WHERE law_id = ?
+            """,
+            (law_id,),
+        )
+        row = cursor.fetchone()
+        return row["diversity"] if row else 0
+
+    def _row_to_law_witness(self, row: sqlite3.Row) -> LawWitnessRecord:
+        return LawWitnessRecord(
+            id=row["id"],
+            law_id=row["law_id"],
+            evaluation_id=row["evaluation_id"],
+            t_fail=row["t_fail"],
+            formatted_witness=row["formatted_witness"],
+            state_at_t=row["state_at_t"],
+            state_at_t1=row["state_at_t1"],
+            observables_at_t_json=row["observables_at_t_json"],
+            observables_at_t1_json=row["observables_at_t1_json"],
+            neighborhood_hash=row["neighborhood_hash"],
+            is_primary=bool(row["is_primary"]),
             created_at=row["created_at"],
         )

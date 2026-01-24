@@ -17,7 +17,7 @@ def make_cluster(
     """Helper to create test clusters."""
     return FailureCluster(
         cluster_id=cluster_id,
-        bucket=bucket,
+        bucket_tags=[bucket.value],  # Convert bucket enum to bucket_tags list
         semantic_cluster_idx=0,
         theorem_ids=theorem_ids or ["thm_001"],
         centroid_signature="test signature",
@@ -41,7 +41,7 @@ class TestObservableProposer:
         assert all(p.cluster_id == "fc_001" for p in proposals)
 
     def test_propose_from_temporal_cluster(self, proposer):
-        cluster = make_cluster("fc_002", FailureBucket.TEMPORAL_EVENTUAL)
+        cluster = make_cluster("fc_002", FailureBucket.EVENTUALITY)
         proposals = proposer.propose_from_cluster(cluster)
 
         assert len(proposals) > 0
@@ -67,7 +67,7 @@ class TestObservableProposer:
     def test_propose_from_all_clusters(self, proposer):
         clusters = [
             make_cluster("fc_001", FailureBucket.LOCAL_PATTERN),
-            make_cluster("fc_002", FailureBucket.TEMPORAL_EVENTUAL),
+            make_cluster("fc_002", FailureBucket.EVENTUALITY),
             make_cluster("fc_003", FailureBucket.MONOTONICITY),
         ]
         proposals = proposer.propose_from_all_clusters(clusters)
@@ -101,7 +101,7 @@ class TestObservableProposer:
     def test_proposals_sorted_by_priority(self, proposer):
         clusters = [
             make_cluster("fc_001", FailureBucket.LOCAL_PATTERN),
-            make_cluster("fc_002", FailureBucket.TEMPORAL_EVENTUAL),
+            make_cluster("fc_002", FailureBucket.EVENTUALITY),
         ]
         proposals = proposer.propose_from_all_clusters(clusters)
 
@@ -119,7 +119,7 @@ class TestObservableProposer:
     def test_get_high_priority_proposals(self, proposer):
         clusters = [
             make_cluster("fc_001", FailureBucket.LOCAL_PATTERN),
-            make_cluster("fc_002", FailureBucket.TEMPORAL_EVENTUAL),
+            make_cluster("fc_002", FailureBucket.EVENTUALITY),
         ]
         proposals = proposer.get_high_priority_proposals(clusters, max_count=3)
 
@@ -142,7 +142,7 @@ class TestObservableProposer:
     def test_proposal_ids_unique(self, proposer):
         clusters = [
             make_cluster("fc_001", FailureBucket.LOCAL_PATTERN),
-            make_cluster("fc_002", FailureBucket.TEMPORAL_EVENTUAL),
+            make_cluster("fc_002", FailureBucket.EVENTUALITY),
         ]
         proposals = proposer.propose_from_all_clusters(clusters, dedupe=False)
 
@@ -152,12 +152,17 @@ class TestObservableProposer:
 
 
 class TestBucketObservableRulesCompleteness:
-    def test_all_non_other_buckets_have_rules(self):
-        """Ensure all buckets except OTHER have observable rules."""
-        for bucket in FailureBucket:
-            if bucket != FailureBucket.OTHER:
-                assert bucket in BUCKET_OBSERVABLE_RULES
-                assert len(BUCKET_OBSERVABLE_RULES[bucket]) > 0
+    def test_all_observable_action_buckets_have_rules(self):
+        """Ensure buckets that have OBSERVABLE action have observable rules.
+
+        Note: DEFINITION_GAP (SCHEMA_FIX action) and OTHER have no observable rules.
+        EVENTUALITY (GATING action) may have some but is optional.
+        """
+        # Buckets that should have observable rules
+        observable_buckets = ["LOCAL_PATTERN", "COLLISION_TRIGGERS", "MONOTONICITY", "SYMMETRY"]
+        for bucket_name in observable_buckets:
+            assert bucket_name in BUCKET_OBSERVABLE_RULES, f"{bucket_name} missing from rules"
+            assert len(BUCKET_OBSERVABLE_RULES[bucket_name]) > 0, f"{bucket_name} has empty rules"
 
     def test_all_templates_have_required_fields(self):
         """Ensure all observable templates have required fields."""
