@@ -601,3 +601,34 @@ CREATE TABLE IF NOT EXISTS held_out_sets (
 
 CREATE INDEX IF NOT EXISTS idx_held_out_run ON held_out_sets(run_id);
 CREATE INDEX IF NOT EXISTS idx_held_out_type ON held_out_sets(set_type);
+
+-- =============================================================================
+-- Web Viewer: LLM Transcripts
+-- =============================================================================
+
+-- LLM transcripts: captures all LLM interactions for debugging and audit
+CREATE TABLE IF NOT EXISTS llm_transcripts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT,
+    iteration_id INTEGER,
+    phase TEXT,
+    component TEXT NOT NULL,  -- 'law_proposer', 'theorem_generator', 'explanation_generator'
+    model_name TEXT NOT NULL,
+    system_instruction TEXT,
+    prompt TEXT NOT NULL,
+    raw_response TEXT NOT NULL,
+    prompt_hash TEXT,
+    prompt_tokens INTEGER,
+    output_tokens INTEGER,
+    thinking_tokens INTEGER DEFAULT 0,
+    total_tokens INTEGER,
+    duration_ms INTEGER,
+    success INTEGER NOT NULL DEFAULT 1,
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_transcripts_run ON llm_transcripts(run_id);
+CREATE INDEX IF NOT EXISTS idx_llm_transcripts_component ON llm_transcripts(component);
+CREATE INDEX IF NOT EXISTS idx_llm_transcripts_phase ON llm_transcripts(phase);
+CREATE INDEX IF NOT EXISTS idx_llm_transcripts_created ON llm_transcripts(created_at);

@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+
+{% block title %}Law {{ law.law_id }} - Popper Discovery{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="/laws">Laws</a></li>
+                <li class="breadcrumb-item active">{{ law.law_id | truncate_text(30) }}</li>
+            </ol>
+        </nav>
+        <h1>Law: {{ law.law_id | truncate_text(50) }}</h1>
+    </div>
+</div>
+
+<!-- Law Info -->
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Law Information</h5>
+            </div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Template</dt>
+                    <dd class="col-sm-8"><span class="badge bg-info">{{ law.template }}</span></dd>
+
+                    <dt class="col-sm-4">Hash</dt>
+                    <dd class="col-sm-8"><code>{{ law.law_hash | truncate_text(20) }}</code></dd>
+
+                    <dt class="col-sm-4">Created</dt>
+                    <dd class="col-sm-8">{{ law.created_at }}</dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Latest Evaluation</h5>
+            </div>
+            <div class="card-body">
+                {% if evaluations %}
+                {% set eval = evaluations[0] %}
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Status</dt>
+                    <dd class="col-sm-8">
+                        {% if eval.status == 'PASS' %}
+                            <span class="badge bg-success">PASS</span>
+                        {% elif eval.status == 'FAIL' %}
+                            <span class="badge bg-danger">FAIL</span>
+                        {% else %}
+                            <span class="badge bg-secondary">UNKNOWN</span>
+                        {% endif %}
+                    </dd>
+
+                    {% if eval.reason_code %}
+                    <dt class="col-sm-4">Reason</dt>
+                    <dd class="col-sm-8">{{ eval.reason_code }}</dd>
+                    {% endif %}
+
+                    <dt class="col-sm-4">Cases Used</dt>
+                    <dd class="col-sm-8">{{ eval.cases_used }} / {{ eval.cases_attempted }}</dd>
+
+                    <dt class="col-sm-4">Runtime</dt>
+                    <dd class="col-sm-8">{{ eval.runtime_ms | format_duration }}</dd>
+                </dl>
+                {% else %}
+                <p class="text-muted mb-0">Not evaluated yet.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Law Content -->
+{% if law_data %}
+<div class="row mb-4">
+    <div class="col">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Law Definition</h5>
+            </div>
+            <div class="card-body">
+                {% if law_data.claim_text or law_data.claim %}
+                <div class="mb-3">
+                    <h6>Claim</h6>
+                    <p class="bg-light p-3 rounded font-monospace">{{ law_data.claim_text or law_data.claim }}</p>
+                </div>
+                {% endif %}
+
+                {% if law_data.preconditions %}
+                <div class="mb-3">
+                    <h6>Preconditions</h6>
+                    <ul class="list-group">
+                        {% for p in law_data.preconditions %}
+                        <li class="list-group-item font-monospace">{{ p }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+
+                {% if law_data.observables %}
+                <div class="mb-3">
+                    <h6>Observables</h6>
+                    <ul class="list-group">
+                        {% for obs in law_data.observables %}
+                        <li class="list-group-item font-monospace">{{ obs }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+
+                {% if law_data.forbidden %}
+                <div class="mb-3">
+                    <h6>Forbidden (Counterexample Definition)</h6>
+                    <p class="bg-danger bg-opacity-10 p-3 rounded font-monospace">{{ law_data.forbidden }}</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Full JSON -->
+<div class="row mb-4">
+    <div class="col">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <button class="btn btn-link p-0 text-decoration-none" type="button"
+                            data-bs-toggle="collapse" data-bs-target="#fullJson">
+                        Full JSON Definition
+                    </button>
+                </h5>
+            </div>
+            <div class="collapse" id="fullJson">
+                <div class="card-body">
+                    <pre class="json-viewer"><code class="language-json">{{ law.law_json | json_pretty }}</code></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Counterexamples -->
+{% if counterexamples %}
+<div class="row mb-4">
+    <div class="col">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Counterexamples ({{ counterexamples | length }})</h5>
+            </div>
+            <div class="card-body">
+                {% for cx in counterexamples %}
+                <div class="card mb-3 border-danger">
+                    <div class="card-header bg-danger bg-opacity-10">
+                        <strong>Counterexample #{{ loop.index }}</strong>
+                        {% if cx.minimized %}
+                        <span class="badge bg-info ms-2">Minimized</span>
+                        {% endif %}
+                    </div>
+                    <div class="card-body">
+                        <dl class="row mb-0">
+                            <dt class="col-sm-3">Initial State</dt>
+                            <dd class="col-sm-9">
+                                <span class="state-display">{{ cx.initial_state }}</span>
+                            </dd>
+
+                            <dt class="col-sm-3">Failure Time</dt>
+                            <dd class="col-sm-9">t = {{ cx.t_fail }} (of {{ cx.t_max }})</dd>
+
+                            {% if cx.witness_json %}
+                            <dt class="col-sm-3">Witness</dt>
+                            <dd class="col-sm-9">
+                                <pre class="json-viewer mb-0"><code class="language-json">{{ cx.witness_json | json_pretty }}</code></pre>
+                            </dd>
+                            {% endif %}
+                        </dl>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Witnesses -->
+{% if witnesses %}
+<div class="row mb-4">
+    <div class="col">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Structured Witnesses ({{ witnesses | length }})</h5>
+            </div>
+            <div class="card-body">
+                {% for w in witnesses %}
+                <div class="card mb-3 {% if w.is_primary %}border-primary{% endif %}">
+                    <div class="card-header">
+                        <strong>t = {{ w.t_fail }}</strong>
+                        {% if w.is_primary %}
+                        <span class="badge bg-primary ms-2">Primary</span>
+                        {% endif %}
+                    </div>
+                    <div class="card-body">
+                        <pre class="mb-0 font-monospace">{{ w.formatted_witness }}</pre>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Evaluation History -->
+{% if evaluations and evaluations | length > 1 %}
+<div class="row mb-4">
+    <div class="col">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Evaluation History ({{ evaluations | length }})</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Status</th>
+                            <th>Cases</th>
+                            <th>Runtime</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for eval in evaluations %}
+                        <tr>
+                            <td>
+                                {% if eval.status == 'PASS' %}
+                                    <span class="badge bg-success">PASS</span>
+                                {% elif eval.status == 'FAIL' %}
+                                    <span class="badge bg-danger">FAIL</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">UNKNOWN</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ eval.cases_used }} / {{ eval.cases_attempted }}</td>
+                            <td>{{ eval.runtime_ms | format_duration }}</td>
+                            <td>{{ eval.created_at }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

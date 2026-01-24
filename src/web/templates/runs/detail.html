@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+
+{% block title %}Run {{ run.run_id }} - Popper Discovery{% endblock %}
+
+{% block extra_css %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="/runs">Runs</a></li>
+                <li class="breadcrumb-item active">{{ run.run_id | truncate_text(30) }}</li>
+            </ol>
+        </nav>
+        <h1>Run: {{ run.run_id | truncate_text(40) }}</h1>
+    </div>
+</div>
+
+<!-- Run Info Card -->
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Run Information</h5>
+            </div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Status</dt>
+                    <dd class="col-sm-8">
+                        {% if run.status == 'running' %}
+                            <span class="badge bg-primary">Running</span>
+                        {% elif run.status == 'completed' %}
+                            <span class="badge bg-success">Completed</span>
+                        {% else %}
+                            <span class="badge bg-danger">Aborted</span>
+                        {% endif %}
+                    </dd>
+
+                    <dt class="col-sm-4">Current Phase</dt>
+                    <dd class="col-sm-8"><span class="badge bg-info">{{ run.current_phase }}</span></dd>
+
+                    <dt class="col-sm-4">Iterations</dt>
+                    <dd class="col-sm-8">{{ run.total_iterations }}</dd>
+
+                    <dt class="col-sm-4">Model</dt>
+                    <dd class="col-sm-8">{{ run.discovery_model_id or '-' }}</dd>
+
+                    <dt class="col-sm-4">Started</dt>
+                    <dd class="col-sm-8">{{ run.started_at }}</dd>
+
+                    <dt class="col-sm-4">Completed</dt>
+                    <dd class="col-sm-8">{{ run.completed_at or '-' }}</dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Phase Transitions</h5>
+            </div>
+            <div class="card-body">
+                {% if transitions %}
+                <ul class="list-group list-group-flush">
+                    {% for t in transitions %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <span class="badge bg-secondary">{{ t.from_phase }}</span>
+                            <span class="mx-2">&rarr;</span>
+                            <span class="badge bg-primary">{{ t.to_phase }}</span>
+                        </div>
+                        <small class="text-muted">
+                            {{ t.trigger }} (score: {{ '%.2f' | format(t.readiness_score or 0) }})
+                        </small>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="text-muted">No phase transitions yet.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Readiness Chart -->
+{% if readiness_snapshots %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Readiness Over Time</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="readinessChart" height="100"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Iterations Timeline -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Iterations Timeline</h5>
+            </div>
+            <div class="card-body">
+                {% if iterations %}
+                <div class="timeline">
+                    {% for iter in iterations %}
+                    <div class="timeline-item {{ iter.status }} phase-{{ iter.phase }}">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <h6 class="mb-1">
+                                    <a href="/runs/{{ run.run_id }}/iterations/{{ iter.iteration_index }}">
+                                        Iteration {{ iter.iteration_index }}
+                                    </a>
+                                    <span class="badge bg-info ms-2">{{ iter.phase }}</span>
+                                    {% if iter.status == 'completed' %}
+                                        <span class="badge bg-success ms-1">Completed</span>
+                                    {% elif iter.status == 'running' %}
+                                        <span class="badge bg-primary ms-1">Running</span>
+                                    {% else %}
+                                        <span class="badge bg-danger ms-1">Aborted</span>
+                                    {% endif %}
+                                </h6>
+                                <small class="text-muted">
+                                    Started: {{ iter.started_at }}
+                                    {% if iter.completed_at %}
+                                     | Completed: {{ iter.completed_at }}
+                                    {% endif %}
+                                </small>
+                            </div>
+                            <div>
+                                {% if iter.readiness_metrics_json %}
+                                <button class="btn btn-sm btn-outline-secondary"
+                                        type="button"
+                                        data-bs-toggle="collapse"
+                                        data-bs-target="#metrics-{{ iter.iteration_index }}">
+                                    Metrics
+                                </button>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% if iter.readiness_metrics_json %}
+                        <div class="collapse mt-2" id="metrics-{{ iter.iteration_index }}">
+                            <pre class="json-viewer"><code class="language-json">{{ iter.readiness_metrics_json | json_pretty }}</code></pre>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-muted text-center py-5">No iterations yet.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Config JSON -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <button class="btn btn-link p-0 text-decoration-none"
+                            type="button"
+                            data-bs-toggle="collapse"
+                            data-bs-target="#configJson">
+                        Run Configuration
+                    </button>
+                </h5>
+            </div>
+            <div class="collapse" id="configJson">
+                <div class="card-body">
+                    <pre class="json-viewer"><code class="language-json">{{ run.config_json | json_pretty }}</code></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{% if readiness_snapshots %}
+<script>
+    fetch('/api/readiness/{{ run.run_id }}')
+        .then(response => response.json())
+        .then(data => {
+            const ctx = document.getElementById('readinessChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.labels,
+                    datasets: [
+                        {
+                            label: 'Combined Score',
+                            data: data.combined_score,
+                            borderColor: '#0d6efd',
+                            backgroundColor: 'rgba(13, 110, 253, 0.1)',
+                            fill: true,
+                            tension: 0.1
+                        },
+                        {
+                            label: 'S_pass',
+                            data: data.s_pass,
+                            borderColor: '#198754',
+                            borderDash: [5, 5],
+                            tension: 0.1
+                        },
+                        {
+                            label: 'S_stability',
+                            data: data.s_stability,
+                            borderColor: '#ffc107',
+                            borderDash: [5, 5],
+                            tension: 0.1
+                        },
+                        {
+                            label: 'S_novel_cex',
+                            data: data.s_novel_cex,
+                            borderColor: '#dc3545',
+                            borderDash: [5, 5],
+                            tension: 0.1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 1.0
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
+                    }
+                }
+            });
+        });
+</script>
+{% endif %}
+{% endblock %}

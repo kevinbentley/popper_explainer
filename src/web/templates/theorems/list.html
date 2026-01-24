@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Theorems - Popper Discovery{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <h1>Theorem Gallery</h1>
+        <p class="text-muted">Browse synthesized theorems derived from laws</p>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="row mb-3">
+    <div class="col-auto">
+        <div class="btn-group" role="group">
+            <a href="/theorems" class="btn {% if not status_filter %}btn-primary{% else %}btn-outline-primary{% endif %}">All</a>
+            <a href="/theorems?status=Established" class="btn {% if status_filter == 'Established' %}btn-success{% else %}btn-outline-success{% endif %}">Established</a>
+            <a href="/theorems?status=Conditional" class="btn {% if status_filter == 'Conditional' %}btn-warning{% else %}btn-outline-warning{% endif %}">Conditional</a>
+            <a href="/theorems?status=Speculative" class="btn {% if status_filter == 'Speculative' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">Speculative</a>
+        </div>
+    </div>
+</div>
+
+<!-- Theorems Grid -->
+<div class="row">
+    {% if theorems %}
+    {% for theorem in theorems %}
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span class="fw-bold">{{ theorem.name | truncate_text(40) }}</span>
+                {% if theorem.status == 'Established' %}
+                    <span class="badge bg-success">Established</span>
+                {% elif theorem.status == 'Conditional' %}
+                    <span class="badge bg-warning text-dark">Conditional</span>
+                {% else %}
+                    <span class="badge bg-secondary">{{ theorem.status }}</span>
+                {% endif %}
+            </div>
+            <div class="card-body">
+                <p class="card-text">{{ theorem.claim | truncate_text(200) }}</p>
+
+                {% if theorem.support_json %}
+                    {% set support_count = (theorem.support_json | json_pretty).count('law_id') %}
+                    <small class="text-muted">
+                        Supporting laws: {{ support_count }}
+                    </small>
+                {% endif %}
+            </div>
+            <div class="card-footer">
+                <a href="/theorems/{{ theorem.theorem_id }}" class="btn btn-sm btn-outline-primary">View Details</a>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="col-12">
+        <div class="text-center py-5">
+            <p class="text-muted">No theorems found.</p>
+            {% if status_filter %}
+            <a href="/theorems" class="btn btn-outline-primary">Clear filters</a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

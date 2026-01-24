@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}Explanations - Popper Discovery{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <h1>Explanation Gallery</h1>
+        <p class="text-muted">Browse mechanistic explanations synthesized from theorems</p>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="row mb-3">
+    <div class="col-auto">
+        <form method="get" class="row g-2">
+            <div class="col-auto">
+                <select name="run_id" class="form-select">
+                    <option value="">All Runs</option>
+                    {% for run in runs %}
+                    <option value="{{ run.run_id }}" {% if run_id == run.run_id %}selected{% endif %}>
+                        {{ run.run_id | truncate_text(30) }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-auto">
+                <div class="btn-group" role="group">
+                    <a href="/explanations{% if run_id %}?run_id={{ run_id }}{% endif %}"
+                       class="btn {% if not status_filter %}btn-primary{% else %}btn-outline-primary{% endif %}">All</a>
+                    <a href="/explanations?status=proposed{% if run_id %}&run_id={{ run_id }}{% endif %}"
+                       class="btn {% if status_filter == 'proposed' %}btn-info{% else %}btn-outline-info{% endif %}">Proposed</a>
+                    <a href="/explanations?status=validated{% if run_id %}&run_id={{ run_id }}{% endif %}"
+                       class="btn {% if status_filter == 'validated' %}btn-success{% else %}btn-outline-success{% endif %}">Validated</a>
+                    <a href="/explanations?status=refuted{% if run_id %}&run_id={{ run_id }}{% endif %}"
+                       class="btn {% if status_filter == 'refuted' %}btn-danger{% else %}btn-outline-danger{% endif %}">Refuted</a>
+                </div>
+            </div>
+            <div class="col-auto">
+                <button type="submit" class="btn btn-outline-secondary">Filter</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Explanations List -->
+<div class="row">
+    {% if explanations %}
+    {% for exp in explanations %}
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div>
+                    <span class="fw-bold">{{ exp.explanation_id }}</span>
+                    {% if exp.status == 'proposed' %}
+                        <span class="badge bg-info ms-2">Proposed</span>
+                    {% elif exp.status == 'validated' %}
+                        <span class="badge bg-success ms-2">Validated</span>
+                    {% elif exp.status == 'refuted' %}
+                        <span class="badge bg-danger ms-2">Refuted</span>
+                    {% else %}
+                        <span class="badge bg-secondary ms-2">{{ exp.status }}</span>
+                    {% endif %}
+                </div>
+                <small class="text-muted">
+                    {% if exp.confidence %}
+                    Confidence: {{ '%.0f%%' | format(exp.confidence * 100) }}
+                    {% endif %}
+                </small>
+            </div>
+            <div class="card-body">
+                <p class="card-text">{{ exp.hypothesis_text | truncate_text(300) }}</p>
+
+                <div class="d-flex justify-content-between align-items-center">
+                    <small class="text-muted">
+                        Run: <a href="/runs/{{ exp.run_id }}">{{ exp.run_id | truncate_text(20) }}</a>
+                        {% if exp.iteration_id is not none %}
+                        | Iteration: {{ exp.iteration_id }}
+                        {% endif %}
+                    </small>
+                    <a href="/explanations/{{ exp.explanation_id }}" class="btn btn-sm btn-outline-primary">View Details</a>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="col-12">
+        <div class="text-center py-5">
+            <p class="text-muted">No explanations found.</p>
+            {% if status_filter or run_id %}
+            <a href="/explanations" class="btn btn-outline-primary">Clear filters</a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

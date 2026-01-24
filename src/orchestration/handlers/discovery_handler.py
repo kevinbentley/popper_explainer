@@ -396,7 +396,7 @@ class DiscoveryPhaseHandler:
             from src.db.models import LawRecord
             import hashlib
 
-            law_json = json.dumps(law.to_dict())
+            law_json = json.dumps(law.model_dump())
             law_hash = hashlib.sha256(law_json.encode()).hexdigest()[:16]
 
             law_record = LawRecord(

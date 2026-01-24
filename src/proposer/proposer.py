@@ -1,10 +1,12 @@
 """Main law proposer orchestrating LLM-driven law discovery."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.claims.schema import CandidateLaw
 from src.proposer.client import GeminiClient, GeminiConfig, MockGeminiClient
@@ -13,6 +15,9 @@ from src.proposer.parser import ParseResult, ResponseParser
 from src.proposer.prompt import PromptBuilder, UniverseContract
 from src.proposer.ranking import RankingFeatures, RankingModel
 from src.proposer.redundancy import RedundancyDetector, RedundancyMatch
+
+if TYPE_CHECKING:
+    from src.db.llm_logger import LLMLogger
 
 
 @dataclass
@@ -105,6 +110,7 @@ class LawProposer:
         client: GeminiClient | MockGeminiClient | None = None,
         contract: UniverseContract | None = None,
         config: ProposerConfig | None = None,
+        llm_logger: LLMLogger | None = None,
     ):
         """Initialize law proposer.
 
@@ -112,10 +118,12 @@ class LawProposer:
             client: LLM client (defaults to GeminiClient)
             contract: Universe contract (defaults to standard kinetic grid)
             config: Proposer configuration
+            llm_logger: Optional LLM logger for capturing all LLM interactions
         """
         self.client = client or GeminiClient()
         self.contract = contract or UniverseContract()
         self.config = config or ProposerConfig()
+        self._llm_logger = llm_logger
 
         self._prompt_builder = PromptBuilder(
             max_token_budget=self.config.max_token_budget,
@@ -176,6 +184,7 @@ class LawProposer:
         self._last_prompt = prompt
         self._last_response = ""
 
+        llm_start = time.time()
         try:
             response = self.client.generate(
                 prompt,
@@ -183,7 +192,33 @@ class LawProposer:
                 temperature=request.temperature,
             )
             self._last_response = response
+            llm_duration_ms = int((time.time() - llm_start) * 1000)
+
+            # Log successful LLM call
+            if self._llm_logger:
+                self._llm_logger.log_call(
+                    prompt=prompt,
+                    response=response,
+                    success=True,
+                    system_instruction=system_instruction,
+                    prompt_tokens=prompt_tokens,
+                    duration_ms=llm_duration_ms,
+                )
         except Exception as e:
+            llm_duration_ms = int((time.time() - llm_start) * 1000)
+
+            # Log failed LLM call
+            if self._llm_logger:
+                self._llm_logger.log_call(
+                    prompt=prompt,
+                    response="",
+                    success=False,
+                    system_instruction=system_instruction,
+                    prompt_tokens=prompt_tokens,
+                    duration_ms=llm_duration_ms,
+                    error_message=str(e),
+                )
+
             return ProposalBatch(
                 prompt_hash=prompt_hash,
                 prompt_tokens=prompt_tokens,
@@ -290,3 +325,31 @@ class LawProposer:
             "prompt": self._last_prompt,
             "response": self._last_response,
         }
+
+    def set_llm_logger(self, logger: LLMLogger | None) -> None:
+        """Set or update the LLM logger.
+
+        Args:
+            logger: LLM logger to use, or None to disable logging
+        """
+        self._llm_logger = logger
+
+    def set_llm_logger_context(
+        self,
+        run_id: str | None = None,
+        iteration_id: int | None = None,
+        phase: str | None = None,
+    ) -> None:
+        """Update the LLM logger's context.
+
+        Args:
+            run_id: Orchestration run ID
+            iteration_id: Current iteration index
+            phase: Current phase name
+        """
+        if self._llm_logger:
+            self._llm_logger.set_context(
+                run_id=run_id,
+                iteration_id=iteration_id,
+                phase=phase,
+            )

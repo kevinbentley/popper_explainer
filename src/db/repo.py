@@ -31,6 +31,7 @@ from src.db.models import (
     LawNoveltyRecord,
     LawRecord,
     LawWitnessRecord,
+    LLMTranscriptRecord,
     NoveltySnapshotRecord,
     ObservableProposalRecord,
     TheoremGenerationArtifactRecord,
@@ -372,6 +373,34 @@ class Repository:
             )
             for row in cursor.fetchall()
         ]
+
+    def get_counterexample_for_evaluation(
+        self, evaluation_id: int
+    ) -> CounterexampleRecord | None:
+        """Get counterexample for an evaluation by evaluation ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM counterexamples WHERE evaluation_id = ? LIMIT 1",
+            (evaluation_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return CounterexampleRecord(
+            id=row["id"],
+            evaluation_id=row["evaluation_id"],
+            law_id=row["law_id"],
+            initial_state=row["initial_state"],
+            config_json=row["config_json"],
+            seed=row["seed"],
+            t_max=row["t_max"],
+            t_fail=row["t_fail"],
+            trajectory_excerpt_json=row["trajectory_excerpt_json"],
+            observables_at_fail_json=row["observables_at_fail_json"],
+            witness_json=row["witness_json"],
+            minimized=bool(row["minimized"]),
+            created_at=row["created_at"],
+        )
 
     # --- Theory operations ---
 
@@ -2992,3 +3021,240 @@ class Repository:
             locked=bool(row["locked"]),
             created_at=row["created_at"],
         )
+
+    # =========================================================================
+    # Web Viewer: LLM Transcript operations
+    # =========================================================================
+
+    def insert_llm_transcript(self, record: LLMTranscriptRecord) -> int:
+        """Insert a new LLM transcript record. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO llm_transcripts (
+                run_id, iteration_id, phase, component, model_name,
+                system_instruction, prompt, raw_response, prompt_hash,
+                prompt_tokens, output_tokens, thinking_tokens, total_tokens,
+                duration_ms, success, error_message
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.run_id,
+                record.iteration_id,
+                record.phase,
+                record.component,
+                record.model_name,
+                record.system_instruction,
+                record.prompt,
+                record.raw_response,
+                record.prompt_hash,
+                record.prompt_tokens,
+                record.output_tokens,
+                record.thinking_tokens,
+                record.total_tokens,
+                record.duration_ms,
+                1 if record.success else 0,
+                record.error_message,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_llm_transcript(self, transcript_id: int) -> LLMTranscriptRecord | None:
+        """Get an LLM transcript by ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM llm_transcripts WHERE id = ?",
+            (transcript_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_llm_transcript(row)
+
+    def list_llm_transcripts(
+        self,
+        run_id: str | None = None,
+        component: str | None = None,
+        phase: str | None = None,
+        search_query: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[LLMTranscriptRecord]:
+        """List LLM transcripts with optional filtering.
+
+        Args:
+            run_id: Filter by orchestration run ID
+            component: Filter by component name
+            phase: Filter by phase name
+            search_query: Search in prompt and response text
+            limit: Maximum records to return
+            offset: Records to skip for pagination
+
+        Returns:
+            List of LLMTranscriptRecord objects
+        """
+        cursor = self.conn.cursor()
+        conditions = []
+        params: list[Any] = []
+
+        if run_id:
+            conditions.append("run_id = ?")
+            params.append(run_id)
+        if component:
+            conditions.append("component = ?")
+            params.append(component)
+        if phase:
+            conditions.append("phase = ?")
+            params.append(phase)
+        if search_query:
+            conditions.append("(prompt LIKE ? OR raw_response LIKE ?)")
+            params.append(f"%{search_query}%")
+            params.append(f"%{search_query}%")
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        params.extend([limit, offset])
+
+        cursor.execute(
+            f"""
+            SELECT * FROM llm_transcripts
+            WHERE {where_clause}
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            params,
+        )
+        return [self._row_to_llm_transcript(row) for row in cursor.fetchall()]
+
+    def get_llm_transcript_count(
+        self,
+        run_id: str | None = None,
+        component: str | None = None,
+    ) -> int:
+        """Get count of LLM transcripts with optional filtering."""
+        cursor = self.conn.cursor()
+        conditions = []
+        params: list[Any] = []
+
+        if run_id:
+            conditions.append("run_id = ?")
+            params.append(run_id)
+        if component:
+            conditions.append("component = ?")
+            params.append(component)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        cursor.execute(
+            f"SELECT COUNT(*) as count FROM llm_transcripts WHERE {where_clause}",
+            params,
+        )
+        row = cursor.fetchone()
+        return row["count"] if row else 0
+
+    def get_llm_transcript_stats(self, run_id: str | None = None) -> dict[str, Any]:
+        """Get statistics about LLM transcripts.
+
+        Returns dict with:
+            - total_calls: Total number of LLM calls
+            - by_component: Dict of counts by component
+            - total_tokens: Total tokens used
+            - total_duration_ms: Total duration in milliseconds
+            - success_rate: Ratio of successful calls
+        """
+        cursor = self.conn.cursor()
+
+        where_clause = "WHERE run_id = ?" if run_id else ""
+        params = [run_id] if run_id else []
+
+        # Get totals
+        cursor.execute(
+            f"""
+            SELECT
+                COUNT(*) as total_calls,
+                COALESCE(SUM(total_tokens), 0) as total_tokens,
+                COALESCE(SUM(duration_ms), 0) as total_duration_ms,
+                COALESCE(AVG(CASE WHEN success THEN 1.0 ELSE 0.0 END), 0) as success_rate
+            FROM llm_transcripts
+            {where_clause}
+            """,
+            params,
+        )
+        row = cursor.fetchone()
+
+        # Get counts by component
+        cursor.execute(
+            f"""
+            SELECT component, COUNT(*) as count
+            FROM llm_transcripts
+            {where_clause}
+            GROUP BY component
+            """,
+            params,
+        )
+        by_component = {r["component"]: r["count"] for r in cursor.fetchall()}
+
+        return {
+            "total_calls": row["total_calls"] if row else 0,
+            "total_tokens": row["total_tokens"] if row else 0,
+            "total_duration_ms": row["total_duration_ms"] if row else 0,
+            "success_rate": row["success_rate"] if row else 0,
+            "by_component": by_component,
+        }
+
+    def _row_to_llm_transcript(self, row: sqlite3.Row) -> LLMTranscriptRecord:
+        return LLMTranscriptRecord(
+            id=row["id"],
+            run_id=row["run_id"],
+            iteration_id=row["iteration_id"],
+            phase=row["phase"],
+            component=row["component"],
+            model_name=row["model_name"],
+            system_instruction=row["system_instruction"],
+            prompt=row["prompt"],
+            raw_response=row["raw_response"],
+            prompt_hash=row["prompt_hash"],
+            prompt_tokens=row["prompt_tokens"],
+            output_tokens=row["output_tokens"],
+            thinking_tokens=row["thinking_tokens"] or 0,
+            total_tokens=row["total_tokens"],
+            duration_ms=row["duration_ms"],
+            success=bool(row["success"]),
+            error_message=row["error_message"],
+            created_at=row["created_at"],
+        )
+
+    # --- Additional web viewer query methods ---
+
+    def list_explanations_for_run(
+        self, run_id: str, limit: int = 100
+    ) -> list[ExplanationRecord]:
+        """List explanations for a run."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM explanations
+            WHERE run_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (run_id, limit),
+        )
+        return [self._row_to_explanation(row) for row in cursor.fetchall()]
+
+    def list_readiness_snapshots_for_run(
+        self, run_id: str, limit: int = 100
+    ) -> list[ReadinessSnapshotRecord]:
+        """List readiness snapshots for a run in chronological order."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM readiness_snapshots
+            WHERE run_id = ?
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (run_id, limit),
+        )
+        return [self._row_to_readiness_snapshot(row) for row in cursor.fetchall()]

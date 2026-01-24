@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+
+{% block title %}LLM Transcripts - Popper Discovery{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <h1>LLM Transcripts</h1>
+        <p class="text-muted">Browse and search all LLM interactions</p>
+    </div>
+</div>
+
+<!-- Search and Filters -->
+<div class="row mb-4">
+    <div class="col">
+        <form method="get" action="/transcripts" class="row g-3">
+            <div class="col-md-4">
+                <input type="text" name="q" class="form-control" placeholder="Search prompts/responses..."
+                       value="{{ search or '' }}">
+            </div>
+            <div class="col-md-2">
+                <select name="component" class="form-select">
+                    <option value="">All Components</option>
+                    <option value="law_proposer" {% if component == 'law_proposer' %}selected{% endif %}>Law Proposer</option>
+                    <option value="theorem_generator" {% if component == 'theorem_generator' %}selected{% endif %}>Theorem Generator</option>
+                    <option value="explanation_generator" {% if component == 'explanation_generator' %}selected{% endif %}>Explanation Generator</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select name="phase" class="form-select">
+                    <option value="">All Phases</option>
+                    <option value="discovery" {% if phase == 'discovery' %}selected{% endif %}>Discovery</option>
+                    <option value="theorem" {% if phase == 'theorem' %}selected{% endif %}>Theorem</option>
+                    <option value="explanation" {% if phase == 'explanation' %}selected{% endif %}>Explanation</option>
+                    <option value="prediction" {% if phase == 'prediction' %}selected{% endif %}>Prediction</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <input type="text" name="run_id" class="form-control" placeholder="Run ID..."
+                       value="{{ run_id or '' }}">
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-primary w-100">Search</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Results Summary -->
+<div class="row mb-3">
+    <div class="col">
+        <p class="text-muted">
+            Showing {{ transcripts | length }} of {{ total_count }} transcripts
+            (Page {{ page }} of {{ total_pages }})
+        </p>
+    </div>
+</div>
+
+<!-- Transcripts List -->
+<div class="row">
+    <div class="col">
+        {% if transcripts %}
+        {% for t in transcripts %}
+        <div class="card mb-3 transcript-card {% if not t.success %}failed{% endif %}">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div>
+                    <a href="/transcripts/{{ t.id }}" class="fw-bold text-decoration-none">
+                        Transcript #{{ t.id }}
+                    </a>
+                    <span class="badge bg-secondary ms-2">{{ t.component }}</span>
+                    {% if t.phase %}
+                    <span class="badge bg-info ms-1">{{ t.phase }}</span>
+                    {% endif %}
+                    {% if not t.success %}
+                    <span class="badge bg-danger ms-1">Failed</span>
+                    {% endif %}
+                </div>
+                <small class="text-muted">{{ t.created_at }}</small>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6 class="text-muted">Prompt</h6>
+                        <pre class="prompt-text bg-light p-2 rounded" style="max-height: 150px; overflow: auto;">{{ t.prompt | truncate_text(500) }}</pre>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="text-muted">Response</h6>
+                        <pre class="response-text bg-light p-2 rounded" style="max-height: 150px; overflow: auto;">{{ t.raw_response | truncate_text(500) }}</pre>
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <small class="text-muted">
+                        Model: {{ t.model_name }}
+                        | Tokens: {{ t.total_tokens | format_tokens }}
+                        | Duration: {{ t.duration_ms | format_duration }}
+                        {% if t.run_id %}
+                        | <a href="/runs/{{ t.run_id }}">Run: {{ t.run_id | truncate_text(15) }}</a>
+                        {% endif %}
+                    </small>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+
+        <!-- Pagination -->
+        {% if total_pages > 1 %}
+        <nav aria-label="Page navigation">
+            <ul class="pagination justify-content-center">
+                {% if page > 1 %}
+                <li class="page-item">
+                    <a class="page-link" href="?page={{ page - 1 }}{% if search %}&q={{ search }}{% endif %}{% if component %}&component={{ component }}{% endif %}{% if phase %}&phase={{ phase }}{% endif %}{% if run_id %}&run_id={{ run_id }}{% endif %}">&laquo; Previous</a>
+                </li>
+                {% endif %}
+
+                {% for p in range(1, total_pages + 1) %}
+                    {% if p == page %}
+                    <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+                    {% elif p <= 3 or p > total_pages - 3 or (p >= page - 2 and p <= page + 2) %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ p }}{% if search %}&q={{ search }}{% endif %}{% if component %}&component={{ component }}{% endif %}{% if phase %}&phase={{ phase }}{% endif %}{% if run_id %}&run_id={{ run_id }}{% endif %}">{{ p }}</a>
+                    </li>
+                    {% elif p == 4 or p == total_pages - 3 %}
+                    <li class="page-item disabled"><span class="page-link">...</span></li>
+                    {% endif %}
+                {% endfor %}
+
+                {% if page < total_pages %}
+                <li class="page-item">
+                    <a class="page-link" href="?page={{ page + 1 }}{% if search %}&q={{ search }}{% endif %}{% if component %}&component={{ component }}{% endif %}{% if phase %}&phase={{ phase }}{% endif %}{% if run_id %}&run_id={{ run_id }}{% endif %}">Next &raquo;</a>
+                </li>
+                {% endif %}
+            </ul>
+        </nav>
+        {% endif %}
+        {% else %}
+        <div class="text-center py-5">
+            <p class="text-muted">No transcripts found.</p>
+            {% if search or component or phase or run_id %}
+            <a href="/transcripts" class="btn btn-outline-primary">Clear filters</a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

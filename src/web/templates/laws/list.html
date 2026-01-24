@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+
+{% block title %}Laws - Popper Discovery{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <h1>Law Gallery</h1>
+        <p class="text-muted">Browse discovered candidate laws with their evaluation status</p>
+    </div>
+</div>
+
+<!-- Stats -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card bg-light">
+            <div class="card-body text-center">
+                <h3>{{ laws_with_evals | length }}</h3>
+                <p class="mb-0 text-muted">Shown</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-white bg-success">
+            <div class="card-body text-center">
+                <h3>{{ eval_summary.get('PASS', 0) }}</h3>
+                <p class="mb-0">PASS</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-white bg-danger">
+            <div class="card-body text-center">
+                <h3>{{ eval_summary.get('FAIL', 0) }}</h3>
+                <p class="mb-0">FAIL</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-white bg-secondary">
+            <div class="card-body text-center">
+                <h3>{{ eval_summary.get('UNKNOWN', 0) }}</h3>
+                <p class="mb-0">UNKNOWN</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="row mb-3">
+    <div class="col-auto">
+        <div class="btn-group" role="group">
+            <a href="/laws" class="btn {% if not status_filter %}btn-primary{% else %}btn-outline-primary{% endif %}">All</a>
+            <a href="/laws?status=PASS" class="btn {% if status_filter == 'PASS' %}btn-success{% else %}btn-outline-success{% endif %}">PASS</a>
+            <a href="/laws?status=FAIL" class="btn {% if status_filter == 'FAIL' %}btn-danger{% else %}btn-outline-danger{% endif %}">FAIL</a>
+            <a href="/laws?status=UNKNOWN" class="btn {% if status_filter == 'UNKNOWN' %}btn-secondary{% else %}btn-outline-secondary{% endif %}">UNKNOWN</a>
+        </div>
+    </div>
+</div>
+
+<!-- Laws Grid -->
+<div class="row">
+    {% if laws_with_evals %}
+    {% for law, eval in laws_with_evals %}
+    <div class="col-md-6 col-lg-4 mb-4">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span class="badge bg-info">{{ law.template }}</span>
+                {% if eval %}
+                    {% if eval.status == 'PASS' %}
+                        <span class="badge bg-success">PASS</span>
+                    {% elif eval.status == 'FAIL' %}
+                        <span class="badge bg-danger">FAIL</span>
+                    {% else %}
+                        <span class="badge bg-secondary">UNKNOWN</span>
+                    {% endif %}
+                {% else %}
+                    <span class="badge bg-warning">Not Evaluated</span>
+                {% endif %}
+            </div>
+            <div class="card-body">
+                <h6 class="card-title">
+                    <a href="/laws/{{ law.law_id }}" class="text-decoration-none">
+                        {{ law.law_id | truncate_text(35) }}
+                    </a>
+                </h6>
+                {% set law_data = law.law_json | json_pretty %}
+                {% if law_data %}
+                    {% set parsed = law.law_json | default('{}') %}
+                    <p class="card-text small text-muted">
+                        {{ parsed | truncate_text(150) }}
+                    </p>
+                {% endif %}
+            </div>
+            <div class="card-footer text-muted small">
+                <div class="d-flex justify-content-between">
+                    <span>{{ law.created_at }}</span>
+                    {% if eval %}
+                    <span>{{ eval.cases_used }} cases</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="col-12">
+        <div class="text-center py-5">
+            <p class="text-muted">No laws found.</p>
+            {% if status_filter %}
+            <a href="/laws" class="btn btn-outline-primary">Clear filters</a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

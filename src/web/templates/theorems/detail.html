@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+
+{% block title %}Theorem: {{ theorem.name }} - Popper Discovery{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="/theorems">Theorems</a></li>
+                <li class="breadcrumb-item active">{{ theorem.name | truncate_text(30) }}</li>
+            </ol>
+        </nav>
+        <h1>{{ theorem.name }}</h1>
+    </div>
+</div>
+
+<!-- Theorem Info -->
+<div class="row mb-4">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Claim</h5>
+            </div>
+            <div class="card-body">
+                <p class="fs-5">{{ theorem.claim }}</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Status</h5>
+            </div>
+            <div class="card-body text-center">
+                {% if theorem.status == 'Established' %}
+                    <span class="badge bg-success fs-4">Established</span>
+                {% elif theorem.status == 'Conditional' %}
+                    <span class="badge bg-warning text-dark fs-4">Conditional</span>
+                {% else %}
+                    <span class="badge bg-secondary fs-4">{{ theorem.status }}</span>
+                {% endif %}
+
+                <p class="mt-3 text-muted small">
+                    Created: {{ theorem.created_at }}
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Supporting Laws -->
+{% if support %}
+<div class="row mb-4">
+    <div class="col">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Supporting Laws ({{ support | length }})</h5>
+            </div>
+            <div class="card-body">
+                <ul class="list-group">
+                    {% for s in support %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            <a href="/laws/{{ s.law_id }}">{{ s.law_id }}</a>
+                            {% if s.role %}
+                            <span class="badge bg-info ms-2">{{ s.role }}</span>
+                            {% endif %}
+                        </div>
+                        {% if s.reason %}
+                        <small class="text-muted">{{ s.reason }}</small>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Failure Modes -->
+{% if failure_modes %}
+<div class="row mb-4">
+    <div class="col">
+        <div class="card border-warning">
+            <div class="card-header bg-warning bg-opacity-10">
+                <h5 class="mb-0">Failure Modes ({{ failure_modes | length }})</h5>
+            </div>
+            <div class="card-body">
+                <ul class="list-group list-group-flush">
+                    {% for fm in failure_modes %}
+                    <li class="list-group-item">{{ fm }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Missing Structure -->
+{% if missing_structure %}
+<div class="row mb-4">
+    <div class="col">
+        <div class="card border-info">
+            <div class="card-header bg-info bg-opacity-10">
+                <h5 class="mb-0">Missing Structure ({{ missing_structure | length }})</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted mb-3">Additional observables or structure that would strengthen this theorem:</p>
+                <ul class="list-group list-group-flush">
+                    {% for ms in missing_structure %}
+                    <li class="list-group-item">{{ ms }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Failure Signature -->
+{% if theorem.failure_signature_text %}
+<div class="row mb-4">
+    <div class="col">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <button class="btn btn-link p-0 text-decoration-none" type="button"
+                            data-bs-toggle="collapse" data-bs-target="#failureSignature">
+                        Failure Signature
+                    </button>
+                </h5>
+            </div>
+            <div class="collapse" id="failureSignature">
+                <div class="card-body">
+                    <dl class="row">
+                        <dt class="col-sm-3">Signature</dt>
+                        <dd class="col-sm-9"><pre class="mb-0">{{ theorem.failure_signature_text }}</pre></dd>
+
+                        {% if theorem.failure_signature_hash %}
+                        <dt class="col-sm-3">Hash</dt>
+                        <dd class="col-sm-9"><code>{{ theorem.failure_signature_hash }}</code></dd>
+                        {% endif %}
+                    </dl>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Raw JSON -->
+<div class="row mb-4">
+    <div class="col">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <button class="btn btn-link p-0 text-decoration-none" type="button"
+                            data-bs-toggle="collapse" data-bs-target="#rawJson">
+                        Raw Data
+                    </button>
+                </h5>
+            </div>
+            <div class="collapse" id="rawJson">
+                <div class="card-body">
+                    <h6>Support JSON</h6>
+                    <pre class="json-viewer"><code class="language-json">{{ theorem.support_json | json_pretty }}</code></pre>
+
+                    <h6 class="mt-3">Failure Modes JSON</h6>
+                    <pre class="json-viewer"><code class="language-json">{{ theorem.failure_modes_json | json_pretty }}</code></pre>
+
+                    <h6 class="mt-3">Missing Structure JSON</h6>
+                    <pre class="json-viewer"><code class="language-json">{{ theorem.missing_structure_json | json_pretty }}</code></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

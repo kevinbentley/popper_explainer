@@ -1,11 +1,13 @@
 """Main theorem generator that orchestrates the generation pipeline."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from src.db.models import CounterexampleRecord, EvaluationRecord, LawRecord
 from src.db.repo import Repository
@@ -18,6 +20,9 @@ from src.theorem.prompt import (
     compute_snapshot_hash,
 )
 from src.theorem.signature import build_failure_signature, hash_signature
+
+if TYPE_CHECKING:
+    from src.db.llm_logger import LLMLogger
 
 
 class LLMClient(Protocol):
@@ -56,11 +61,13 @@ class TheoremGenerator:
         client: LLMClient,
         config: TheoremGeneratorConfig | None = None,
         system_instruction: str | None = None,
+        llm_logger: LLMLogger | None = None,
     ):
         self.client = client
         self.config = config or TheoremGeneratorConfig()
         self.parser = TheoremParser()
         self.system_instruction = system_instruction or THEOREM_SYSTEM_INSTRUCTION
+        self._llm_logger = llm_logger
 
     def build_law_snapshot(
         self,
@@ -169,22 +176,43 @@ class TheoremGenerator:
         # Build prompt
         prompt = build_prompt(law_snapshots, target_count)
         prompt_hash = compute_prompt_hash(prompt)
+        prompt_tokens = len(prompt) // 4  # Rough estimate
 
         # Call LLM - handle different client interfaces
         start_time = time.time()
+        response = ""
+        success = True
+        error_message = None
 
-        # Check if client supports system_instruction parameter (GeminiClient)
-        if hasattr(self.client, 'generate') and 'system_instruction' in self.client.generate.__code__.co_varnames:
-            response = self.client.generate(
-                prompt,
-                system_instruction=self.system_instruction,
-                temperature=0.7,
-            )
-        else:
-            # Basic client - just pass prompt
-            response = self.client.generate(prompt)
+        try:
+            # Check if client supports system_instruction parameter (GeminiClient)
+            if hasattr(self.client, 'generate') and 'system_instruction' in self.client.generate.__code__.co_varnames:
+                response = self.client.generate(
+                    prompt,
+                    system_instruction=self.system_instruction,
+                    temperature=0.7,
+                )
+            else:
+                # Basic client - just pass prompt
+                response = self.client.generate(prompt)
+        except Exception as e:
+            success = False
+            error_message = str(e)
+            raise
+        finally:
+            runtime_ms = int((time.time() - start_time) * 1000)
 
-        runtime_ms = int((time.time() - start_time) * 1000)
+            # Log LLM call
+            if self._llm_logger:
+                self._llm_logger.log_call(
+                    prompt=prompt,
+                    response=response,
+                    success=success,
+                    system_instruction=self.system_instruction,
+                    prompt_tokens=prompt_tokens,
+                    duration_ms=runtime_ms,
+                    error_message=error_message,
+                )
 
         # Parse response
         parse_result = self.parser.parse(response)
@@ -221,6 +249,34 @@ class TheoremGenerator:
             signatures[theorem.theorem_id] = (sig, sig_hash)
 
         return batch, signatures
+
+    def set_llm_logger(self, logger: LLMLogger | None) -> None:
+        """Set or update the LLM logger.
+
+        Args:
+            logger: LLM logger to use, or None to disable logging
+        """
+        self._llm_logger = logger
+
+    def set_llm_logger_context(
+        self,
+        run_id: str | None = None,
+        iteration_id: int | None = None,
+        phase: str | None = None,
+    ) -> None:
+        """Update the LLM logger's context.
+
+        Args:
+            run_id: Orchestration run ID
+            iteration_id: Current iteration index
+            phase: Current phase name
+        """
+        if self._llm_logger:
+            self._llm_logger.set_context(
+                run_id=run_id,
+                iteration_id=iteration_id,
+                phase=phase,
+            )
 
     def generate_with_artifact(
         self,

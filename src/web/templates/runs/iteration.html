@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}Iteration {{ iteration.iteration_index }} - Run {{ run.run_id }} - Popper Discovery{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="/runs">Runs</a></li>
+                <li class="breadcrumb-item"><a href="/runs/{{ run.run_id }}">{{ run.run_id | truncate_text(20) }}</a></li>
+                <li class="breadcrumb-item active">Iteration {{ iteration.iteration_index }}</li>
+            </ol>
+        </nav>
+        <h1>Iteration {{ iteration.iteration_index }}</h1>
+    </div>
+</div>
+
+<!-- Iteration Info -->
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Iteration Information</h5>
+            </div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Status</dt>
+                    <dd class="col-sm-8">
+                        {% if iteration.status == 'completed' %}
+                            <span class="badge bg-success">Completed</span>
+                        {% elif iteration.status == 'running' %}
+                            <span class="badge bg-primary">Running</span>
+                        {% else %}
+                            <span class="badge bg-danger">Aborted</span>
+                        {% endif %}
+                    </dd>
+
+                    <dt class="col-sm-4">Phase</dt>
+                    <dd class="col-sm-8"><span class="badge bg-info">{{ iteration.phase }}</span></dd>
+
+                    <dt class="col-sm-4">Started</dt>
+                    <dd class="col-sm-8">{{ iteration.started_at }}</dd>
+
+                    <dt class="col-sm-4">Completed</dt>
+                    <dd class="col-sm-8">{{ iteration.completed_at or '-' }}</dd>
+
+                    {% if iteration.prompt_hash %}
+                    <dt class="col-sm-4">Prompt Hash</dt>
+                    <dd class="col-sm-8"><code>{{ iteration.prompt_hash }}</code></dd>
+                    {% endif %}
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Navigation</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    {% if iteration.iteration_index > 0 %}
+                    <a href="/runs/{{ run.run_id }}/iterations/{{ iteration.iteration_index - 1 }}"
+                       class="btn btn-outline-primary">
+                        &larr; Previous
+                    </a>
+                    {% else %}
+                    <span></span>
+                    {% endif %}
+
+                    <a href="/runs/{{ run.run_id }}/iterations/{{ iteration.iteration_index + 1 }}"
+                       class="btn btn-outline-primary">
+                        Next &rarr;
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Control Block -->
+{% if iteration.control_block_json %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Control Block</h5>
+            </div>
+            <div class="card-body">
+                <pre class="json-viewer"><code class="language-json">{{ iteration.control_block_json | json_pretty }}</code></pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Readiness Metrics -->
+{% if iteration.readiness_metrics_json %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Readiness Metrics</h5>
+            </div>
+            <div class="card-body">
+                <pre class="json-viewer"><code class="language-json">{{ iteration.readiness_metrics_json | json_pretty }}</code></pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Summary -->
+{% if iteration.summary_json %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Summary</h5>
+            </div>
+            <div class="card-body">
+                <pre class="json-viewer"><code class="language-json">{{ iteration.summary_json | json_pretty }}</code></pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

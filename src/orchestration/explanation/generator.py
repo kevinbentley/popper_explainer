@@ -26,6 +26,7 @@ from src.orchestration.explanation.models import (
 )
 
 if TYPE_CHECKING:
+    from src.db.llm_logger import LLMLogger
     from src.theorem.models import Theorem
 
 logger = logging.getLogger(__name__)
@@ -117,15 +118,18 @@ class ExplanationGenerator:
         self,
         client: Any,  # LLM client
         config: ExplanationGeneratorConfig | None = None,
+        llm_logger: LLMLogger | None = None,
     ):
         """Initialize the generator.
 
         Args:
             client: LLM client for generation
             config: Generator configuration
+            llm_logger: Optional LLM logger for capturing all LLM interactions
         """
         self.client = client
         self.config = config or ExplanationGeneratorConfig()
+        self._llm_logger = llm_logger
 
     def generate(
         self,
@@ -157,8 +161,14 @@ class ExplanationGenerator:
         theorems_text = self._format_theorems(theorems)
         prompt = EXPLANATION_PROMPT_TEMPLATE.format(theorems_text=theorems_text)
         prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:16]
+        prompt_tokens = len(prompt) // 4  # Rough estimate
 
         # Generate via LLM
+        response = ""
+        llm_success = True
+        llm_error = None
+        llm_start = time.time()
+
         try:
             response = self.client.generate(
                 prompt,
@@ -170,10 +180,25 @@ class ExplanationGenerator:
         except Exception as e:
             logger.error(f"LLM generation failed: {e}")
             warnings.append(f"LLM error: {str(e)}")
+            llm_success = False
+            llm_error = str(e)
             # Fall back to rule-based generation
             explanations = [
                 self._generate_fallback_explanation(theorems, iteration_id)
             ]
+        finally:
+            llm_duration_ms = int((time.time() - llm_start) * 1000)
+
+            # Log LLM call
+            if self._llm_logger:
+                self._llm_logger.log_call(
+                    prompt=prompt,
+                    response=response,
+                    success=llm_success,
+                    prompt_tokens=prompt_tokens,
+                    duration_ms=llm_duration_ms,
+                    error_message=llm_error,
+                )
 
         runtime_ms = int((time.time() - start_time) * 1000)
 
@@ -183,6 +208,34 @@ class ExplanationGenerator:
             runtime_ms=runtime_ms,
             warnings=warnings,
         )
+
+    def set_llm_logger(self, logger: LLMLogger | None) -> None:
+        """Set or update the LLM logger.
+
+        Args:
+            logger: LLM logger to use, or None to disable logging
+        """
+        self._llm_logger = logger
+
+    def set_llm_logger_context(
+        self,
+        run_id: str | None = None,
+        iteration_id: int | None = None,
+        phase: str | None = None,
+    ) -> None:
+        """Update the LLM logger's context.
+
+        Args:
+            run_id: Orchestration run ID
+            iteration_id: Current iteration index
+            phase: Current phase name
+        """
+        if self._llm_logger:
+            self._llm_logger.set_context(
+                run_id=run_id,
+                iteration_id=iteration_id,
+                phase=phase,
+            )
 
     def _format_theorems(self, theorems: list[Theorem]) -> str:
         """Format theorems for the prompt."""

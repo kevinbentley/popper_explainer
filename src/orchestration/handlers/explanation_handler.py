@@ -84,6 +84,7 @@ class ExplanationPhaseHandler(PhaseHandler):
         repo: Repository | None,
         llm_client: Any = None,
         config: ExplanationPhaseConfig | None = None,
+        llm_logger: Any = None,
     ):
         """Initialize the explanation handler.
 
@@ -91,6 +92,7 @@ class ExplanationPhaseHandler(PhaseHandler):
             repo: Database repository
             llm_client: LLM client for generation
             config: Phase configuration
+            llm_logger: Optional LLM logger for capturing interactions
         """
         self.repo = repo
         self.llm_client = llm_client
@@ -102,6 +104,7 @@ class ExplanationPhaseHandler(PhaseHandler):
                 max_explanations=self.config.max_explanations,
                 min_theorem_support=self.config.min_theorems,
             ),
+            llm_logger=llm_logger,
         ) if llm_client else None
 
         self._current_explanation: Explanation | None = None

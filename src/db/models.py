@@ -338,3 +338,51 @@ class LawWitnessRecord:
     is_primary: bool = False
     id: int | None = None
     created_at: datetime | None = None
+
+
+# =============================================================================
+# Web Viewer: LLM Transcripts
+# =============================================================================
+
+
+@dataclass
+class LLMTranscriptRecord:
+    """A record of an LLM interaction for debugging and audit.
+
+    Attributes:
+        component: Which component made the call (law_proposer, theorem_generator, etc.)
+        model_name: LLM model used
+        prompt: The prompt text sent to the LLM
+        raw_response: The raw response from the LLM
+        success: Whether the call succeeded
+        run_id: Optional orchestration run ID
+        iteration_id: Optional iteration index
+        phase: Optional phase name
+        system_instruction: Optional system instruction
+        prompt_hash: Hash of the prompt for deduplication
+        prompt_tokens: Estimated prompt tokens
+        output_tokens: Estimated output tokens
+        thinking_tokens: Thinking tokens (for extended thinking models)
+        total_tokens: Total tokens used
+        duration_ms: Call duration in milliseconds
+        error_message: Error message if call failed
+    """
+
+    component: str
+    model_name: str
+    prompt: str
+    raw_response: str
+    success: bool = True
+    run_id: str | None = None
+    iteration_id: int | None = None
+    phase: str | None = None
+    system_instruction: str | None = None
+    prompt_hash: str | None = None
+    prompt_tokens: int | None = None
+    output_tokens: int | None = None
+    thinking_tokens: int = 0
+    total_tokens: int | None = None
+    duration_ms: int | None = None
+    error_message: str | None = None
+    id: int | None = None
+    created_at: datetime | None = None

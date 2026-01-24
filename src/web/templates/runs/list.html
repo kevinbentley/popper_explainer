@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}Runs - Popper Discovery{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <h1>Orchestration Runs</h1>
+        <p class="text-muted">All discovery runs with their current status and phase</p>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="row mb-3">
+    <div class="col-auto">
+        <div class="btn-group" role="group">
+            <a href="/runs" class="btn {% if not status_filter %}btn-primary{% else %}btn-outline-primary{% endif %}">All</a>
+            <a href="/runs?status=running" class="btn {% if status_filter == 'running' %}btn-primary{% else %}btn-outline-primary{% endif %}">Running</a>
+            <a href="/runs?status=completed" class="btn {% if status_filter == 'completed' %}btn-primary{% else %}btn-outline-primary{% endif %}">Completed</a>
+            <a href="/runs?status=aborted" class="btn {% if status_filter == 'aborted' %}btn-primary{% else %}btn-outline-primary{% endif %}">Aborted</a>
+        </div>
+    </div>
+</div>
+
+<!-- Runs Table -->
+<div class="card">
+    <div class="card-body">
+        {% if runs %}
+        <table class="table table-hover">
+            <thead>
+                <tr>
+                    <th>Run ID</th>
+                    <th>Status</th>
+                    <th>Current Phase</th>
+                    <th>Iterations</th>
+                    <th>Model</th>
+                    <th>Started</th>
+                    <th>Completed</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for run in runs %}
+                <tr>
+                    <td>
+                        <a href="/runs/{{ run.run_id }}">
+                            {{ run.run_id }}
+                        </a>
+                    </td>
+                    <td>
+                        {% if run.status == 'running' %}
+                            <span class="badge bg-primary">Running</span>
+                        {% elif run.status == 'completed' %}
+                            <span class="badge bg-success">Completed</span>
+                        {% else %}
+                            <span class="badge bg-danger">Aborted</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="badge bg-info">{{ run.current_phase }}</span>
+                    </td>
+                    <td>{{ run.total_iterations }}</td>
+                    <td>{{ run.discovery_model_id or '-' }}</td>
+                    <td>{{ run.started_at }}</td>
+                    <td>{{ run.completed_at or '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted text-center py-5">No runs found.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,270 @@
+{% extends "base.html" %}
+
+{% block title %}Explanation {{ explanation.explanation_id }} - Popper Discovery{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="/explanations">Explanations</a></li>
+                <li class="breadcrumb-item active">{{ explanation.explanation_id }}</li>
+            </ol>
+        </nav>
+        <h1>Explanation: {{ explanation.explanation_id }}</h1>
+    </div>
+</div>
+
+<!-- Status and Confidence -->
+<div class="row mb-4">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Hypothesis</h5>
+            </div>
+            <div class="card-body">
+                <p class="fs-5">{{ explanation.hypothesis_text }}</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Status</h5>
+            </div>
+            <div class="card-body text-center">
+                {% if explanation.status == 'proposed' %}
+                    <span class="badge bg-info fs-4">Proposed</span>
+                {% elif explanation.status == 'validated' %}
+                    <span class="badge bg-success fs-4">Validated</span>
+                {% elif explanation.status == 'refuted' %}
+                    <span class="badge bg-danger fs-4">Refuted</span>
+                {% else %}
+                    <span class="badge bg-secondary fs-4">{{ explanation.status }}</span>
+                {% endif %}
+
+                {% if explanation.confidence %}
+                <div class="mt-3">
+                    <div class="progress" style="height: 25px;">
+                        <div class="progress-bar" role="progressbar"
+                             style="width: {{ explanation.confidence * 100 }}%;"
+                             aria-valuenow="{{ explanation.confidence * 100 }}"
+                             aria-valuemin="0" aria-valuemax="100">
+                            {{ '%.0f%%' | format(explanation.confidence * 100) }}
+                        </div>
+                    </div>
+                    <small class="text-muted">Confidence</small>
+                </div>
+                {% endif %}
+
+                <p class="mt-3 text-muted small">
+                    Run: <a href="/runs/{{ explanation.run_id }}">{{ explanation.run_id | truncate_text(15) }}</a>
+                    {% if explanation.iteration_id is not none %}
+                    <br>Iteration: {{ explanation.iteration_id }}
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Mechanism -->
+{% if mechanism %}
+<div class="row mb-4">
+    <div class="col">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Mechanism</h5>
+            </div>
+            <div class="card-body">
+                {% if mechanism.description %}
+                <p class="lead">{{ mechanism.description }}</p>
+                {% endif %}
+
+                {% if mechanism.rules %}
+                <h6 class="mt-3">Rules</h6>
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Type</th>
+                                <th>Condition</th>
+                                <th>Effect</th>
+                                <th>Priority</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for rule in mechanism.rules %}
+                            <tr>
+                                <td><code>{{ rule.rule_id or loop.index }}</code></td>
+                                <td>
+                                    <span class="badge
+                                        {% if rule.rule_type == 'movement' %}bg-primary
+                                        {% elif rule.rule_type == 'interaction' %}bg-warning text-dark
+                                        {% elif rule.rule_type == 'transformation' %}bg-info
+                                        {% elif rule.rule_type == 'boundary' %}bg-secondary
+                                        {% elif rule.rule_type == 'conservation' %}bg-success
+                                        {% else %}bg-light text-dark{% endif %}">
+                                        {{ rule.rule_type }}
+                                    </span>
+                                </td>
+                                <td>{{ rule.condition }}</td>
+                                <td>{{ rule.effect }}</td>
+                                <td>{{ rule.priority }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+
+                {% if mechanism.assumptions %}
+                <h6 class="mt-3">Assumptions</h6>
+                <ul class="list-group list-group-flush">
+                    {% for assumption in mechanism.assumptions %}
+                    <li class="list-group-item bg-light">{{ assumption }}</li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+
+                {% if mechanism.limitations %}
+                <h6 class="mt-3">Limitations</h6>
+                <ul class="list-group list-group-flush">
+                    {% for limitation in mechanism.limitations %}
+                    <li class="list-group-item bg-warning bg-opacity-10">{{ limitation }}</li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Supporting Theorems -->
+{% if supporting_theorems %}
+<div class="row mb-4">
+    <div class="col">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Supporting Theorems ({{ supporting_theorems | length }})</h5>
+            </div>
+            <div class="card-body">
+                <ul class="list-group list-group-flush">
+                    {% for tid in supporting_theorems %}
+                    <li class="list-group-item">
+                        <a href="/theorems/{{ tid }}">{{ tid }}</a>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Open Questions -->
+{% if open_questions %}
+<div class="row mb-4">
+    <div class="col">
+        <div class="card border-info">
+            <div class="card-header bg-info bg-opacity-10">
+                <h5 class="mb-0">Open Questions ({{ open_questions | length }})</h5>
+            </div>
+            <div class="card-body">
+                {% for q in open_questions %}
+                <div class="card mb-2">
+                    <div class="card-body py-2">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <span>{{ q.question }}</span>
+                            <div>
+                                {% if q.category %}
+                                <span class="badge bg-secondary">{{ q.category }}</span>
+                                {% endif %}
+                                {% if q.priority %}
+                                <span class="badge
+                                    {% if q.priority == 'high' %}bg-danger
+                                    {% elif q.priority == 'medium' %}bg-warning text-dark
+                                    {% else %}bg-light text-dark{% endif %}">
+                                    {{ q.priority }}
+                                </span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Criticisms -->
+{% if criticisms %}
+<div class="row mb-4">
+    <div class="col">
+        <div class="card border-warning">
+            <div class="card-header bg-warning bg-opacity-10">
+                <h5 class="mb-0">Criticisms ({{ criticisms | length }})</h5>
+            </div>
+            <div class="card-body">
+                {% for c in criticisms %}
+                <div class="card mb-2
+                    {% if c.severity == 'critical' %}border-danger
+                    {% elif c.severity == 'major' %}border-warning
+                    {% else %}border-secondary{% endif %}">
+                    <div class="card-body py-2">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <span>{{ c.criticism }}</span>
+                            <div>
+                                {% if c.source %}
+                                <span class="badge bg-secondary">{{ c.source }}</span>
+                                {% endif %}
+                                <span class="badge
+                                    {% if c.severity == 'critical' %}bg-danger
+                                    {% elif c.severity == 'major' %}bg-warning text-dark
+                                    {% else %}bg-light text-dark{% endif %}">
+                                    {{ c.severity }}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Raw JSON -->
+<div class="row mb-4">
+    <div class="col">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <button class="btn btn-link p-0 text-decoration-none" type="button"
+                            data-bs-toggle="collapse" data-bs-target="#rawJson">
+                        Raw Data
+                    </button>
+                </h5>
+            </div>
+            <div class="collapse" id="rawJson">
+                <div class="card-body">
+                    <h6>Mechanism JSON</h6>
+                    <pre class="json-viewer"><code class="language-json">{{ explanation.mechanism_json | json_pretty }}</code></pre>
+
+                    <h6 class="mt-3">Open Questions JSON</h6>
+                    <pre class="json-viewer"><code class="language-json">{{ explanation.open_questions_json | json_pretty }}</code></pre>
+
+                    <h6 class="mt-3">Criticisms JSON</h6>
+                    <pre class="json-viewer"><code class="language-json">{{ explanation.criticisms_json | json_pretty }}</code></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

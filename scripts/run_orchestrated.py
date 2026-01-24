@@ -183,6 +183,7 @@ def run_orchestration(args) -> int:
         Exit code
     """
     from src.db.repo import Repository
+    from src.db.llm_logger import LLMLogger
     from src.discovery.novelty import NoveltyTracker
     from src.harness.config import HarnessConfig
     from src.harness.harness import Harness
@@ -227,6 +228,11 @@ def run_orchestration(args) -> int:
         for phase in Phase:
             config.max_phase_iterations[phase] = args.max_phase_iterations
 
+    # Create LLM loggers for capturing all LLM interactions
+    proposer_logger = LLMLogger(repo, component="law_proposer")
+    theorem_logger = LLMLogger(repo, component="theorem_generator")
+    explanation_logger = LLMLogger(repo, component="explanation_generator")
+
     # Create components
     if args.mock_llm:
         from src.proposer.client import MockGeminiClient
@@ -238,6 +244,7 @@ def run_orchestration(args) -> int:
     proposer = LawProposer(
         client=llm_client,
         config=ProposerConfig(verbose=args.verbose),
+        llm_logger=proposer_logger,
     )
 
     harness = Harness(
@@ -262,6 +269,7 @@ def run_orchestration(args) -> int:
     theorem_generator = TheoremGenerator(
         client=llm_client,
         config=TheoremGeneratorConfig(),
+        llm_logger=theorem_logger,
     )
     theorem_handler = TheoremPhaseHandler(
         generator=theorem_generator,
@@ -278,6 +286,7 @@ def run_orchestration(args) -> int:
         repo=repo,
         llm_client=llm_client,
         config=ExplanationPhaseConfig(min_theorems=3),
+        llm_logger=explanation_logger,
     )
 
     # Create prediction handler
