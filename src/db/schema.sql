@@ -1,5 +1,5 @@
 -- Popper Explainer Database Schema
--- Version: 5 (PHASE-E: Deterministic clustering, witness capture, signature versioning)
+-- Version: 6 (PHASE-F: Orchestration engine, predictions, held-out sets)
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -428,3 +428,176 @@ CREATE INDEX IF NOT EXISTS idx_law_witnesses_law ON law_witnesses(law_id);
 CREATE INDEX IF NOT EXISTS idx_law_witnesses_eval ON law_witnesses(evaluation_id);
 CREATE INDEX IF NOT EXISTS idx_law_witnesses_neighborhood ON law_witnesses(neighborhood_hash);
 CREATE INDEX IF NOT EXISTS idx_law_witnesses_primary ON law_witnesses(is_primary);
+
+-- =============================================================================
+-- PHASE-F: Orchestration engine tables
+-- =============================================================================
+
+-- Orchestration runs: top-level container for a full scientific loop
+CREATE TABLE IF NOT EXISTS orchestration_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT UNIQUE NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    current_phase TEXT NOT NULL DEFAULT 'discovery',
+    config_json TEXT NOT NULL,
+    universe_id TEXT,
+    sim_hash TEXT,
+    harness_hash TEXT,
+    discovery_model_id TEXT,
+    tester_model_id TEXT,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
+    total_iterations INTEGER DEFAULT 0,
+    CONSTRAINT valid_orch_status CHECK (status IN ('running', 'completed', 'aborted')),
+    CONSTRAINT valid_orch_phase CHECK (current_phase IN ('discovery', 'theorem', 'explanation', 'prediction', 'finalize'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_orch_runs_status ON orchestration_runs(status);
+CREATE INDEX IF NOT EXISTS idx_orch_runs_phase ON orchestration_runs(current_phase);
+
+-- Orchestration iterations: each loop step within a run
+CREATE TABLE IF NOT EXISTS orchestration_iterations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    iteration_index INTEGER NOT NULL,
+    phase TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
+    prompt_hash TEXT,
+    control_block_json TEXT,
+    readiness_metrics_json TEXT,
+    summary_json TEXT,
+    FOREIGN KEY (run_id) REFERENCES orchestration_runs(run_id),
+    UNIQUE (run_id, iteration_index),
+    CONSTRAINT valid_iter_status CHECK (status IN ('running', 'completed', 'aborted'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_orch_iter_run ON orchestration_iterations(run_id);
+CREATE INDEX IF NOT EXISTS idx_orch_iter_phase ON orchestration_iterations(run_id, phase);
+CREATE INDEX IF NOT EXISTS idx_orch_iter_status ON orchestration_iterations(status);
+
+-- Phase transitions: audit trail of phase changes
+CREATE TABLE IF NOT EXISTS phase_transitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    iteration_id INTEGER NOT NULL,
+    from_phase TEXT NOT NULL,
+    to_phase TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    readiness_score REAL,
+    evidence_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (run_id) REFERENCES orchestration_runs(run_id),
+    FOREIGN KEY (iteration_id) REFERENCES orchestration_iterations(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_phase_trans_run ON phase_transitions(run_id);
+CREATE INDEX IF NOT EXISTS idx_phase_trans_trigger ON phase_transitions(trigger);
+
+-- Readiness snapshots: periodic metrics capture for phase transitions
+CREATE TABLE IF NOT EXISTS readiness_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    iteration_id INTEGER NOT NULL,
+    phase TEXT NOT NULL,
+    s_pass REAL,
+    s_stability REAL,
+    s_novel_cex REAL,
+    s_harness_health REAL,
+    s_redundancy REAL,
+    s_coverage REAL,
+    s_prediction_accuracy REAL,
+    s_adversarial_accuracy REAL,
+    s_held_out_accuracy REAL,
+    combined_score REAL,
+    weights_json TEXT,
+    source_counts_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (run_id) REFERENCES orchestration_runs(run_id),
+    FOREIGN KEY (iteration_id) REFERENCES orchestration_iterations(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_readiness_run ON readiness_snapshots(run_id);
+CREATE INDEX IF NOT EXISTS idx_readiness_phase ON readiness_snapshots(phase);
+
+-- Explanations: mechanistic hypotheses from explanation phase
+CREATE TABLE IF NOT EXISTS explanations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    iteration_id INTEGER,
+    explanation_id TEXT UNIQUE NOT NULL,
+    hypothesis_text TEXT NOT NULL,
+    mechanism_json TEXT,
+    supporting_theorem_ids_json TEXT,
+    open_questions_json TEXT,
+    criticisms_json TEXT,
+    confidence REAL,
+    status TEXT DEFAULT 'proposed',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (run_id) REFERENCES orchestration_runs(run_id),
+    CONSTRAINT valid_expl_status CHECK (status IN ('proposed', 'validated', 'refuted'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_expl_run ON explanations(run_id);
+CREATE INDEX IF NOT EXISTS idx_expl_status ON explanations(status);
+
+-- Predictions: generated by explanation phase for verification
+CREATE TABLE IF NOT EXISTS predictions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    iteration_id INTEGER,
+    prediction_id TEXT UNIQUE NOT NULL,
+    explanation_id TEXT,
+    initial_state TEXT NOT NULL,
+    horizon INTEGER NOT NULL,
+    predicted_state TEXT NOT NULL,
+    predicted_observables_json TEXT,
+    confidence REAL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (run_id) REFERENCES orchestration_runs(run_id),
+    FOREIGN KEY (explanation_id) REFERENCES explanations(explanation_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pred_run ON predictions(run_id);
+CREATE INDEX IF NOT EXISTS idx_pred_explanation ON predictions(explanation_id);
+
+-- Prediction evaluations: verification results against simulator
+CREATE TABLE IF NOT EXISTS prediction_evaluations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prediction_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    actual_state TEXT NOT NULL,
+    is_exact_match INTEGER NOT NULL,
+    hamming_distance INTEGER,
+    cell_accuracy REAL,
+    observable_errors_json TEXT,
+    evaluation_set TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (prediction_id) REFERENCES predictions(prediction_id),
+    FOREIGN KEY (run_id) REFERENCES orchestration_runs(run_id),
+    UNIQUE (prediction_id, evaluation_set),
+    CONSTRAINT valid_eval_set CHECK (evaluation_set IN ('held_out', 'adversarial', 'regression'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_pred_eval_run ON prediction_evaluations(run_id);
+CREATE INDEX IF NOT EXISTS idx_pred_eval_set ON prediction_evaluations(run_id, evaluation_set);
+CREATE INDEX IF NOT EXISTS idx_pred_eval_match ON prediction_evaluations(is_exact_match);
+
+-- Held-out test sets: locked evaluation sets for non-gameable testing
+CREATE TABLE IF NOT EXISTS held_out_sets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    set_type TEXT NOT NULL,
+    generation_seed INTEGER NOT NULL,
+    cases_json TEXT NOT NULL,
+    case_count INTEGER NOT NULL,
+    locked INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (run_id) REFERENCES orchestration_runs(run_id),
+    UNIQUE (run_id, set_type),
+    CONSTRAINT valid_set_type CHECK (set_type IN ('random', 'adversarial', 'regression'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_held_out_run ON held_out_sets(run_id);
+CREATE INDEX IF NOT EXISTS idx_held_out_type ON held_out_sets(set_type);

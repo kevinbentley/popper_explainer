@@ -6,6 +6,16 @@ from pathlib import Path
 from typing import Any
 
 from src.db.escalation_models import EscalationRunRecord, LawRetestRecord
+from src.db.orchestration_models import (
+    ExplanationRecord,
+    HeldOutSetRecord,
+    OrchestrationIterationRecord,
+    OrchestrationRunRecord,
+    PhaseTransitionRecord,
+    PredictionEvaluationRecord,
+    PredictionRecord,
+    ReadinessSnapshotRecord,
+)
 from src.db.models import (
     AuditLogRecord,
     CaseSetRecord,
@@ -29,7 +39,7 @@ from src.db.models import (
     TheoryRecord,
 )
 
-SCHEMA_VERSION = 5  # PHASE-E: Deterministic clustering, witness capture
+SCHEMA_VERSION = 6  # PHASE-F: Orchestration engine, predictions, held-out sets
 
 
 class Repository:
@@ -2320,5 +2330,665 @@ class Repository:
             observables_at_t1_json=row["observables_at_t1_json"],
             neighborhood_hash=row["neighborhood_hash"],
             is_primary=bool(row["is_primary"]),
+            created_at=row["created_at"],
+        )
+
+    # =========================================================================
+    # PHASE-F: Orchestration engine operations
+    # =========================================================================
+
+    # --- Orchestration run operations ---
+
+    def insert_orchestration_run(self, run: OrchestrationRunRecord) -> int:
+        """Insert a new orchestration run. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO orchestration_runs (
+                run_id, status, current_phase, config_json,
+                universe_id, sim_hash, harness_hash,
+                discovery_model_id, tester_model_id, total_iterations
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run.run_id,
+                run.status,
+                run.current_phase,
+                run.config_json,
+                run.universe_id,
+                run.sim_hash,
+                run.harness_hash,
+                run.discovery_model_id,
+                run.tester_model_id,
+                run.total_iterations,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_orchestration_run(self, run_id: str) -> OrchestrationRunRecord | None:
+        """Get an orchestration run by run_id."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM orchestration_runs WHERE run_id = ?",
+            (run_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_orchestration_run(row)
+
+    def update_orchestration_run(
+        self,
+        run_id: str,
+        status: str | None = None,
+        current_phase: str | None = None,
+        total_iterations: int | None = None,
+        completed_at: str | None = None,
+    ) -> None:
+        """Update an orchestration run."""
+        updates = []
+        params: list[Any] = []
+
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+        if current_phase is not None:
+            updates.append("current_phase = ?")
+            params.append(current_phase)
+        if total_iterations is not None:
+            updates.append("total_iterations = ?")
+            params.append(total_iterations)
+        if completed_at is not None:
+            updates.append("completed_at = ?")
+            params.append(completed_at)
+
+        if not updates:
+            return
+
+        params.append(run_id)
+        cursor = self.conn.cursor()
+        cursor.execute(
+            f"UPDATE orchestration_runs SET {', '.join(updates)} WHERE run_id = ?",
+            params,
+        )
+        self.conn.commit()
+
+    def list_orchestration_runs(
+        self, status: str | None = None, limit: int = 100
+    ) -> list[OrchestrationRunRecord]:
+        """List orchestration runs."""
+        cursor = self.conn.cursor()
+        if status:
+            cursor.execute(
+                """
+                SELECT * FROM orchestration_runs
+                WHERE status = ?
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                (status, limit),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM orchestration_runs ORDER BY started_at DESC LIMIT ?",
+                (limit,),
+            )
+        return [self._row_to_orchestration_run(row) for row in cursor.fetchall()]
+
+    def _row_to_orchestration_run(
+        self, row: sqlite3.Row
+    ) -> OrchestrationRunRecord:
+        return OrchestrationRunRecord(
+            id=row["id"],
+            run_id=row["run_id"],
+            status=row["status"],
+            current_phase=row["current_phase"],
+            config_json=row["config_json"],
+            universe_id=row["universe_id"],
+            sim_hash=row["sim_hash"],
+            harness_hash=row["harness_hash"],
+            discovery_model_id=row["discovery_model_id"],
+            tester_model_id=row["tester_model_id"],
+            total_iterations=row["total_iterations"],
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+        )
+
+    # --- Orchestration iteration operations ---
+
+    def insert_orchestration_iteration(
+        self, iteration: OrchestrationIterationRecord
+    ) -> int:
+        """Insert a new orchestration iteration. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO orchestration_iterations (
+                run_id, iteration_index, phase, status,
+                prompt_hash, control_block_json, readiness_metrics_json, summary_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                iteration.run_id,
+                iteration.iteration_index,
+                iteration.phase,
+                iteration.status,
+                iteration.prompt_hash,
+                iteration.control_block_json,
+                iteration.readiness_metrics_json,
+                iteration.summary_json,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_orchestration_iteration(
+        self, run_id: str, iteration_index: int
+    ) -> OrchestrationIterationRecord | None:
+        """Get an orchestration iteration by run_id and index."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM orchestration_iterations
+            WHERE run_id = ? AND iteration_index = ?
+            """,
+            (run_id, iteration_index),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_orchestration_iteration(row)
+
+    def get_latest_iteration(
+        self, run_id: str
+    ) -> OrchestrationIterationRecord | None:
+        """Get the most recent iteration for a run."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM orchestration_iterations
+            WHERE run_id = ?
+            ORDER BY iteration_index DESC
+            LIMIT 1
+            """,
+            (run_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_orchestration_iteration(row)
+
+    def update_orchestration_iteration(
+        self,
+        iteration_id: int,
+        status: str | None = None,
+        control_block_json: str | None = None,
+        readiness_metrics_json: str | None = None,
+        summary_json: str | None = None,
+        completed_at: str | None = None,
+    ) -> None:
+        """Update an orchestration iteration."""
+        updates = []
+        params: list[Any] = []
+
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+        if control_block_json is not None:
+            updates.append("control_block_json = ?")
+            params.append(control_block_json)
+        if readiness_metrics_json is not None:
+            updates.append("readiness_metrics_json = ?")
+            params.append(readiness_metrics_json)
+        if summary_json is not None:
+            updates.append("summary_json = ?")
+            params.append(summary_json)
+        if completed_at is not None:
+            updates.append("completed_at = ?")
+            params.append(completed_at)
+
+        if not updates:
+            return
+
+        params.append(iteration_id)
+        cursor = self.conn.cursor()
+        cursor.execute(
+            f"UPDATE orchestration_iterations SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        self.conn.commit()
+
+    def list_iterations_for_run(
+        self, run_id: str, limit: int = 100
+    ) -> list[OrchestrationIterationRecord]:
+        """List iterations for a run in order."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM orchestration_iterations
+            WHERE run_id = ?
+            ORDER BY iteration_index ASC
+            LIMIT ?
+            """,
+            (run_id, limit),
+        )
+        return [self._row_to_orchestration_iteration(row) for row in cursor.fetchall()]
+
+    def _row_to_orchestration_iteration(
+        self, row: sqlite3.Row
+    ) -> OrchestrationIterationRecord:
+        return OrchestrationIterationRecord(
+            id=row["id"],
+            run_id=row["run_id"],
+            iteration_index=row["iteration_index"],
+            phase=row["phase"],
+            status=row["status"],
+            prompt_hash=row["prompt_hash"],
+            control_block_json=row["control_block_json"],
+            readiness_metrics_json=row["readiness_metrics_json"],
+            summary_json=row["summary_json"],
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+        )
+
+    # --- Phase transition operations ---
+
+    def insert_phase_transition(self, transition: PhaseTransitionRecord) -> int:
+        """Insert a phase transition record. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO phase_transitions (
+                run_id, iteration_id, from_phase, to_phase,
+                trigger, readiness_score, evidence_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                transition.run_id,
+                transition.iteration_id,
+                transition.from_phase,
+                transition.to_phase,
+                transition.trigger,
+                transition.readiness_score,
+                transition.evidence_json,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def list_phase_transitions(
+        self, run_id: str, limit: int = 100
+    ) -> list[PhaseTransitionRecord]:
+        """List phase transitions for a run."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM phase_transitions
+            WHERE run_id = ?
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (run_id, limit),
+        )
+        return [self._row_to_phase_transition(row) for row in cursor.fetchall()]
+
+    def _row_to_phase_transition(
+        self, row: sqlite3.Row
+    ) -> PhaseTransitionRecord:
+        return PhaseTransitionRecord(
+            id=row["id"],
+            run_id=row["run_id"],
+            iteration_id=row["iteration_id"],
+            from_phase=row["from_phase"],
+            to_phase=row["to_phase"],
+            trigger=row["trigger"],
+            readiness_score=row["readiness_score"],
+            evidence_json=row["evidence_json"],
+            created_at=row["created_at"],
+        )
+
+    # --- Readiness snapshot operations ---
+
+    def insert_readiness_snapshot(
+        self, snapshot: ReadinessSnapshotRecord
+    ) -> int:
+        """Insert a readiness snapshot. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO readiness_snapshots (
+                run_id, iteration_id, phase,
+                s_pass, s_stability, s_novel_cex, s_harness_health, s_redundancy,
+                s_coverage, s_prediction_accuracy, s_adversarial_accuracy,
+                s_held_out_accuracy, combined_score, weights_json, source_counts_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot.run_id,
+                snapshot.iteration_id,
+                snapshot.phase,
+                snapshot.s_pass,
+                snapshot.s_stability,
+                snapshot.s_novel_cex,
+                snapshot.s_harness_health,
+                snapshot.s_redundancy,
+                snapshot.s_coverage,
+                snapshot.s_prediction_accuracy,
+                snapshot.s_adversarial_accuracy,
+                snapshot.s_held_out_accuracy,
+                snapshot.combined_score,
+                snapshot.weights_json,
+                snapshot.source_counts_json,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_latest_readiness_snapshot(
+        self, run_id: str
+    ) -> ReadinessSnapshotRecord | None:
+        """Get the most recent readiness snapshot for a run."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM readiness_snapshots
+            WHERE run_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (run_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_readiness_snapshot(row)
+
+    def _row_to_readiness_snapshot(
+        self, row: sqlite3.Row
+    ) -> ReadinessSnapshotRecord:
+        return ReadinessSnapshotRecord(
+            id=row["id"],
+            run_id=row["run_id"],
+            iteration_id=row["iteration_id"],
+            phase=row["phase"],
+            s_pass=row["s_pass"],
+            s_stability=row["s_stability"],
+            s_novel_cex=row["s_novel_cex"],
+            s_harness_health=row["s_harness_health"],
+            s_redundancy=row["s_redundancy"],
+            s_coverage=row["s_coverage"],
+            s_prediction_accuracy=row["s_prediction_accuracy"],
+            s_adversarial_accuracy=row["s_adversarial_accuracy"],
+            s_held_out_accuracy=row["s_held_out_accuracy"],
+            combined_score=row["combined_score"],
+            weights_json=row["weights_json"],
+            source_counts_json=row["source_counts_json"],
+            created_at=row["created_at"],
+        )
+
+    # --- Explanation operations ---
+
+    def insert_explanation(self, explanation: ExplanationRecord) -> int:
+        """Insert a new explanation. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO explanations (
+                run_id, iteration_id, explanation_id, hypothesis_text,
+                mechanism_json, supporting_theorem_ids_json,
+                open_questions_json, criticisms_json, confidence, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                explanation.run_id,
+                explanation.iteration_id,
+                explanation.explanation_id,
+                explanation.hypothesis_text,
+                explanation.mechanism_json,
+                explanation.supporting_theorem_ids_json,
+                explanation.open_questions_json,
+                explanation.criticisms_json,
+                explanation.confidence,
+                explanation.status,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_explanation(self, explanation_id: str) -> ExplanationRecord | None:
+        """Get an explanation by ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM explanations WHERE explanation_id = ?",
+            (explanation_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_explanation(row)
+
+    def _row_to_explanation(self, row: sqlite3.Row) -> ExplanationRecord:
+        return ExplanationRecord(
+            id=row["id"],
+            run_id=row["run_id"],
+            iteration_id=row["iteration_id"],
+            explanation_id=row["explanation_id"],
+            hypothesis_text=row["hypothesis_text"],
+            mechanism_json=row["mechanism_json"],
+            supporting_theorem_ids_json=row["supporting_theorem_ids_json"],
+            open_questions_json=row["open_questions_json"],
+            criticisms_json=row["criticisms_json"],
+            confidence=row["confidence"],
+            status=row["status"],
+            created_at=row["created_at"],
+        )
+
+    # --- Prediction operations ---
+
+    def insert_prediction(self, prediction: PredictionRecord) -> int:
+        """Insert a new prediction. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO predictions (
+                run_id, iteration_id, prediction_id, explanation_id,
+                initial_state, horizon, predicted_state,
+                predicted_observables_json, confidence
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                prediction.run_id,
+                prediction.iteration_id,
+                prediction.prediction_id,
+                prediction.explanation_id,
+                prediction.initial_state,
+                prediction.horizon,
+                prediction.predicted_state,
+                prediction.predicted_observables_json,
+                prediction.confidence,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_prediction(self, prediction_id: str) -> PredictionRecord | None:
+        """Get a prediction by ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM predictions WHERE prediction_id = ?",
+            (prediction_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_prediction(row)
+
+    def list_predictions_for_run(
+        self, run_id: str, limit: int = 100
+    ) -> list[PredictionRecord]:
+        """List predictions for a run."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM predictions
+            WHERE run_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (run_id, limit),
+        )
+        return [self._row_to_prediction(row) for row in cursor.fetchall()]
+
+    def _row_to_prediction(self, row: sqlite3.Row) -> PredictionRecord:
+        return PredictionRecord(
+            id=row["id"],
+            run_id=row["run_id"],
+            iteration_id=row["iteration_id"],
+            prediction_id=row["prediction_id"],
+            explanation_id=row["explanation_id"],
+            initial_state=row["initial_state"],
+            horizon=row["horizon"],
+            predicted_state=row["predicted_state"],
+            predicted_observables_json=row["predicted_observables_json"],
+            confidence=row["confidence"],
+            created_at=row["created_at"],
+        )
+
+    # --- Prediction evaluation operations ---
+
+    def insert_prediction_evaluation(
+        self, evaluation: PredictionEvaluationRecord
+    ) -> int:
+        """Insert a prediction evaluation. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO prediction_evaluations (
+                prediction_id, run_id, actual_state, is_exact_match,
+                hamming_distance, cell_accuracy, observable_errors_json, evaluation_set
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                evaluation.prediction_id,
+                evaluation.run_id,
+                evaluation.actual_state,
+                1 if evaluation.is_exact_match else 0,
+                evaluation.hamming_distance,
+                evaluation.cell_accuracy,
+                evaluation.observable_errors_json,
+                evaluation.evaluation_set,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_prediction_evaluations(
+        self, run_id: str, evaluation_set: str | None = None
+    ) -> list[PredictionEvaluationRecord]:
+        """Get prediction evaluations for a run."""
+        cursor = self.conn.cursor()
+        if evaluation_set:
+            cursor.execute(
+                """
+                SELECT * FROM prediction_evaluations
+                WHERE run_id = ? AND evaluation_set = ?
+                ORDER BY created_at DESC
+                """,
+                (run_id, evaluation_set),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT * FROM prediction_evaluations
+                WHERE run_id = ?
+                ORDER BY created_at DESC
+                """,
+                (run_id,),
+            )
+        return [self._row_to_prediction_evaluation(row) for row in cursor.fetchall()]
+
+    def _row_to_prediction_evaluation(
+        self, row: sqlite3.Row
+    ) -> PredictionEvaluationRecord:
+        return PredictionEvaluationRecord(
+            id=row["id"],
+            prediction_id=row["prediction_id"],
+            run_id=row["run_id"],
+            actual_state=row["actual_state"],
+            is_exact_match=bool(row["is_exact_match"]),
+            hamming_distance=row["hamming_distance"],
+            cell_accuracy=row["cell_accuracy"],
+            observable_errors_json=row["observable_errors_json"],
+            evaluation_set=row["evaluation_set"],
+            created_at=row["created_at"],
+        )
+
+    # --- Held-out set operations ---
+
+    def insert_held_out_set(self, held_out_set: HeldOutSetRecord) -> int:
+        """Insert a held-out test set. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO held_out_sets (
+                run_id, set_type, generation_seed, cases_json, case_count, locked
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                held_out_set.run_id,
+                held_out_set.set_type,
+                held_out_set.generation_seed,
+                held_out_set.cases_json,
+                held_out_set.case_count,
+                1 if held_out_set.locked else 0,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_held_out_set(
+        self, run_id: str, set_type: str
+    ) -> HeldOutSetRecord | None:
+        """Get a held-out set by run_id and type."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM held_out_sets
+            WHERE run_id = ? AND set_type = ?
+            """,
+            (run_id, set_type),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_held_out_set(row)
+
+    def list_held_out_sets(self, run_id: str) -> list[HeldOutSetRecord]:
+        """List all held-out sets for a run."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM held_out_sets WHERE run_id = ?",
+            (run_id,),
+        )
+        return [self._row_to_held_out_set(row) for row in cursor.fetchall()]
+
+    def _row_to_held_out_set(self, row: sqlite3.Row) -> HeldOutSetRecord:
+        return HeldOutSetRecord(
+            id=row["id"],
+            run_id=row["run_id"],
+            set_type=row["set_type"],
+            generation_seed=row["generation_seed"],
+            cases_json=row["cases_json"],
+            case_count=row["case_count"],
+            locked=bool(row["locked"]),
             created_at=row["created_at"],
         )
