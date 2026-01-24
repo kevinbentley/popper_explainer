@@ -1,48 +1,45 @@
-Below is a requirements document for the **Tester Harness** subsystem. This is the component that takes a `CandidateLaw` (from Law Discovery) plus the simulator contract, generates/chooses experiments, runs them, and returns **PASS / FAIL / UNKNOWN** with **counterexamples** and **power metrics**.
+# Test Harness Subsystem — Implementation Guide
 
-I am assuming your simulator already exists as a deterministic `step()` / `run()` function over states (or will), and that you are not yet committing to running arbitrary LLM-written Python. I include both modes: **Plan-Driven** (recommended first) and **Sandboxed Code** (optional extension).
-
----
-
-# Requirements Document: Tester Harness Subsystem
-
-## 0. Purpose
-
-The Tester Harness evaluates candidate laws Popper-style by attempting to **falsify** them under explicit preconditions and within specified horizons, using:
-
-* deterministic simulation execution
-* structured experiment families (generators)
-* metamorphic tests (symmetry commutation)
-* adversarial search for counterexamples
-* capability-aware reporting (why something is unknown)
-
-It must produce:
-
-* concrete counterexamples when a law fails
-* “unknown” with actionable reason codes when it cannot decide
-* test power / coverage metrics so “pass” is not mistaken for “proven”
+This document describes the **Tester Harness** subsystem: the component that evaluates `CandidateLaw` objects by attempting falsification via simulation, returning **PASS / FAIL / UNKNOWN** verdicts with counterexamples and power metrics.
 
 ---
 
-## 1. Scope
+## Quick Reference
 
-### In scope
+| Component | File | Purpose |
+|-----------|------|---------|
+| Main orchestrator | `src/harness/harness.py` | `Harness.evaluate(law) → LawVerdict` |
+| Configuration | `src/harness/config.py` | `HarnessConfig` dataclass |
+| Verdicts | `src/harness/verdict.py` | `LawVerdict`, `Counterexample`, `ReasonCode` |
+| Evaluator | `src/harness/evaluator.py` | Per-case evaluation with precondition checking |
+| Generators | `src/harness/generators/` | Case generation strategies (6 families) |
+| Templates | `src/claims/templates.py` | 8 template checkers (Invariant, Monotone, etc.) |
+| Power metrics | `src/harness/power.py` | `PowerMetrics` for coverage tracking |
+| Adversarial | `src/harness/adversarial.py` | `AdversarialSearcher` for mutation-based search |
+| Minimizer | `src/harness/minimizer.py` | Delta-debugging counterexample minimization |
+| Witness | `src/harness/witness.py` | PHASE-E formatted witness capture |
 
-* compiling claim templates into executable predicates over trajectories
-* experiment case generation (random + constrained)
-* running simulations and collecting observables
-* checking claims and producing counterexamples
-* adversarial counterexample search (property-based + hillclimb)
-* metamorphic tests for symmetry claims
-* UNKNOWN classification with reason codes
-* logging and reproducibility (seeds, configs, traces)
+---
 
-### Out of scope
+## 1. Architecture Overview
 
-* discovering laws (Law Discovery)
-* mechanism/axiom synthesis and proof derivations
-* editing/learning the simulator rule itself
-* high-level agent orchestration across subsystems (though Harness should be callable)
+```
+Harness.evaluate(law: CandidateLaw) → LawVerdict
+    │
+    ├─→ _check_capabilities(law)     # Missing observables/transforms?
+    ├─→ _evaluator.prepare(law)      # Compile law to TemplateChecker
+    ├─→ _generate_cases(law)         # Multi-strategy case generation
+    │
+    ├─→ For each case:
+    │     ├─→ is_valid_initial_state()  # No X at t=0
+    │     ├─→ _evaluator.evaluate_case(case, T)
+    │     ├─→ Track power metrics
+    │     └─→ If failed: create Counterexample
+    │
+    ├─→ _adversarial.search()        # Mutation-based falsification
+    ├─→ _minimizer.minimize()        # Reduce counterexample
+    └─→ _determine_verdict()         # PASS/FAIL/UNKNOWN with reason
+```
 
 ---
 
@@ -50,475 +47,387 @@ It must produce:
 
 ### Inputs
 
-1. `UniverseContract`
+**CandidateLaw** (from `src/claims/schema.py`):
+- `template`: One of 8 supported templates
+- `quantifiers`: Time horizon T, eventually horizon H
+- `preconditions`: Conditions required for test validity
+- `observables`: Observable definitions
+- `claim_ast`: Structured claim (AST-based evaluation)
+- `proposed_tests`: Optional test hints from discovery
+- `capability_requirements`: Missing observables/transforms/generators
 
-* symbols, state format, config knobs
-* available observables/transforms/generator families
-* resource limits defaults
-
-2. `CandidateLaw` (from Law Discovery)
-
-* template, quantifiers, horizon
-* preconditions
-* observables and definitions
-* claim + forbidden
-* proposed test families (optional but used for prioritization)
-
-3. `HarnessConfig`
-
-* budgets, seeds, timeouts, max cases, max horizon
-* adversarial search parameters
-* logging verbosity
+**HarnessConfig** (from `src/harness/config.py`):
+```python
+@dataclass
+class HarnessConfig:
+    seed: int = 42
+    max_runtime_ms_per_law: int = 5000
+    max_cases: int = 300
+    default_T: int = 50
+    max_T: int = 200
+    min_cases_used_for_pass: int = 50
+    enable_adversarial_search: bool = True
+    adversarial_budget: int = 1500
+    enable_counterexample_minimization: bool = True
+    minimization_budget: int = 300
+    require_non_vacuous: bool = True
+    min_antecedent_triggers: int = 20
+    min_trigger_diversity: int = 2
+    generator_weights: dict[str, float]  # See section 4
+```
 
 ### Outputs
 
-1. `LawVerdict`
-
-* `status`: `PASS | FAIL | UNKNOWN`
-* `reason_code`: for UNKNOWN (and optionally PASS/FAIL metadata)
-* `counterexample`: if FAIL (minimal reproducible case)
-* `evidence`: summary of runs and checks
-* `power_metrics`: coverage and discriminative strength
-* `artifacts`: optional traces, metrics time series, metamorphic mismatch witness
-
----
-
-## 3. Core Requirements
-
-### R1 — Claim Compilation
-
-The Harness must support the claim template set defined in Law Discovery:
-
-* invariant
-* monotone
-* implication_step
-* implication_state
-* eventually
-* symmetry_commutation
-* bound
-
-It must compile each `CandidateLaw` into a checkable predicate over:
-
-* `initial_state`
-* `trajectory` (states 0..T)
-* `observables(t)` for declared observables
-
-If compilation fails (unknown template, invalid expression), verdict is UNKNOWN with `reason_code = ambiguous_claim`.
-
----
-
-### R2 — Preconditions Enforcement
-
-For each candidate experiment case, the harness must evaluate `preconditions` on the initial state/config:
-
-* Cases that do not satisfy preconditions are not allowed to count as evidence.
-* If after budgeted generation/search the harness cannot produce *any* precondition-satisfying case, verdict is UNKNOWN with `reason_code = unmet_preconditions`.
-
-Must record: how many attempted cases were rejected for preconditions.
-
----
-
-### R3 — Observable Resolution and Instrumentation
-
-Harness must compute declared observables via:
-
-* primitive observables in UniverseContract (e.g., `count(symbol)`, `grid_length`)
-* derived observables defined by restricted expressions over primitives (e.g., `R_total = count('>') + count('X')`)
-
-If an observable requires missing capability (e.g., collision events, wrap events, preimage existence) the harness returns UNKNOWN with:
-
-* `reason_code = missing_observable`
-* `missing = [...]`
-
----
-
-### R4 — Experiment Families (Generators)
-
-Harness must support a modular generator framework:
-
-#### Required built-in families (minimum viable)
-
-1. `random_density_sweep`
-
-* random initial states at densities or count constraints
-
-2. `constrained_pair_interactions`
-
-* place localized patterns (e.g., `><`, `>.<`, etc.) at controlled separations
-
-3. `edge_wrapping_cases`
-
-* ensure particles cross boundaries within horizon (for boundary claims)
-
-4. `symmetry_metamorphic_suite`
-
-* generate random states and test commutation with available transforms
-
-5. `adversarial_mutation_search`
-
-* mutate an initial state to maximize violation score / find counterexample
-
-Each family must accept a standard parameter schema and be seedable.
-
-If a law proposes families not implemented, harness may ignore them and use defaults, but must record unmet family support. If the law *requires* an unsupported family (capability requirement), verdict may become UNKNOWN with `reason_code = missing_generator_knob`.
-
----
-
-### R5 — Default Test Strategy
-
-If a law does not specify tests, harness must still attempt falsification using a default multi-stage strategy:
-
-1. Quick smoke: N small random cases
-2. Structured: constrained interactions and edge cases
-3. Metamorphic: if applicable (symmetry templates or laws mentioning transforms)
-4. Adversarial: mutation/hillclimb to search for counterexample
-
-This ensures “pass” is not just “we didn’t look.”
-
----
-
-### R6 — Counterexample Search (Popper pressure)
-
-For each law, harness must attempt to find a counterexample with a bounded search budget.
-
-Minimum capabilities:
-
-* property-based random search
-* mutation-based hillclimbing with a violation score
-* optional: small exhaustive enumeration for tiny grid sizes (useful for refuting absolutes)
-
-If a counterexample is found, verdict must be FAIL and include a minimal reproduction package (see R11).
-
----
-
-### R7 — Symmetry Testing as Commutation
-
-For `symmetry_commutation` template, harness must test:
-
-`evolve(Transform(S), T) == Transform(evolve(S, T))`
-
-Where:
-
-* `Transform` is one of the declared transforms (mirror+swap, shift, etc.)
-
-Harness must:
-
-* generate cases that exercise the symmetry (not only empty or trivial states)
-* produce a witness at the first time step where mismatch occurs
-* return FAIL with witness if mismatch found
-
-If transform not available, UNKNOWN with `reason_code = missing_transform`.
-
----
-
-### R8 — Eventuality Claims Must Be Checked Properly
-
-For `eventually` template:
-
-`∀t0: P(t0) -> ∃t in [t0..t0+H] Q(t)`
-
-Harness must:
-
-* check all `t0` where P holds in the trajectory
-* verify existence of t satisfying Q within window
-* return FAIL with specific t0 and missing window witness if violated
-
-If law’s `H` is too large for resource limit, allow clamping but must record that the test was incomplete; verdict becomes UNKNOWN unless configured otherwise.
-
----
-
-### R9 — UNKNOWN Must Be Actionable (Reason Codes)
-
-Harness must never return UNKNOWN without a reason code and “minimal capability needed.”
-
-Required reason codes:
-
-* `missing_observable`
-* `missing_transform`
-* `missing_generator_knob`
-* `ambiguous_claim`
-* `unmet_preconditions`
-* `resource_limit`
-* `inconclusive_low_power` (tests ran, but power too low)
-
-Each UNKNOWN must include:
-
-* `details`: what was missing or why inconclusive
-* `suggested_upgrade`: what capability would likely make it decidable
-
----
-
-### R10 — Power Metrics (Don’t confuse PASS with proof)
-
-Every PASS or UNKNOWN must include metrics that indicate how strong the testing was.
-
-Required power metrics:
-
-* `cases_attempted`, `cases_used` (preconditions satisfied)
-* `coverage` (simple proxies, e.g., density bins hit, collision events observed, boundary wraps observed)
-* `violation_score_max` achieved during adversarial search
-* `metamorphic_cases` run and mismatch counts
-* `rival_discrimination` (optional, see R14)
-* `vacuity_checks`: whether P ever held for implication/eventually templates
-
-PASS is only valid if:
-
-* `cases_used >= min_cases_used`
-* `vacuity_checks` pass (i.e., not all tests were vacuous)
-  Otherwise PASS must be downgraded to UNKNOWN with `reason_code = inconclusive_low_power`.
-
----
-
-### R11 — Counterexample Minimization
-
-When FAIL occurs, harness must attempt to minimize the counterexample to improve auditability:
-
-* reduce grid length if possible
-* reduce number of particles/symbols while preserving failure
-* reduce horizon to first failing step
-* produce canonical formatting of initial state and config
-
-This can be heuristic and bounded by budget, but must exist.
-
-Output must include:
-
-* `initial_state`
-* `config` (grid length, boundary type, etc.)
-* `seed` (if generator-based)
-* `T`, and failing time index `t_fail`
-* `trajectory_excerpt` around failure
-* computed observables at failure
-
----
-
-### R12 — Reproducibility and Determinism
-
-Given the same:
-
-* simulator version/hash
-* harness config
-* random seed
-* initial state + config
-
-the harness must reproduce identical verdict and counterexample.
-
-Harness must log:
-
-* `sim_hash`, `harness_hash`, `law_id`, `seed`, `config`
-
----
-
-### R13 — Safety and Resource Limits
-
-Harness must enforce hard limits:
-
-* max runtime per law
-* max steps per simulation (T cap)
-* max number of cases
-* max memory for stored traces (store excerpts by default)
-
-If limits are hit before sufficient power, verdict is UNKNOWN with `reason_code = resource_limit`.
-
----
-
-## 4. Optional Extension: Sandboxed LLM Test Code
-
-This is optional and should be Phase 2+.
-
-### R14 — Sandboxed Code Interface
-
-If enabled, the harness may execute tester-provided code, but only inside a strict harness API:
-
-Allowed user code functions:
-
-* `generate_cases(api) -> list[Case]` (optional)
-* `check(api, case) -> CheckResult` (optional)
-
-User code must not:
-
-* import modules
-* access filesystem/network/subprocess
-* define or override simulator
-* call eval/exec
-* run unbounded loops
-
-### R15 — AST Validation
-
-Before execution, harness must parse code into AST and reject disallowed nodes and patterns.
-
-Minimum disallow list:
-
-* `Import`, `ImportFrom`
-* `Exec`, `Eval`, `Compile` (or Python equivalents)
-* `open`, `__import__`, `globals`, `locals`, `getattr` (unless allowlisted)
-* attribute access outside allowlisted API objects
-* while loops without static bounds
-* recursion (or set recursion depth to 0)
-
-### R16 — Isolation
-
-Run code in a subprocess with:
-
-* CPU time limit
-* memory cap
-* no network
-* no file access
-* kill on timeout
-
-If sandbox triggers, verdict UNKNOWN with `reason_code = resource_limit` (and include sandbox error detail).
-
----
-
-## 5. Rival Discrimination (Recommended but Optional)
-
-### R17 — Discriminative Testing Against Rival Simulators
-
-To prevent “tests that always pass,” harness can optionally run the same test suite against one or more **rival universes** (small rule variations).
-
-If a law passes on true simulator but also passes on all rivals, `rival_discrimination` is low.
-
-This should not change PASS/FAIL for the real simulator, but should affect power and can downgrade PASS → UNKNOWN if discrimination is required.
-
----
-
-## 6. Interfaces and Data Types
-
-### 6.1 HarnessConfig
-
-```json
-{
-  "seed": 12345,
-  "max_runtime_ms_per_law": 2000,
-  "max_cases": 500,
-  "default_T": 50,
-  "max_T": 200,
-  "min_cases_used_for_pass": 50,
-  "enable_adversarial_search": true,
-  "adversarial_budget": 2000,
-  "enable_counterexample_minimization": true,
-  "minimization_budget": 500,
-  "store_full_trajectories": false
-}
+**LawVerdict** (from `src/harness/verdict.py`):
+```python
+@dataclass
+class LawVerdict:
+    law_id: str
+    status: str  # "PASS", "FAIL", "UNKNOWN"
+    reason_code: ReasonCode | None
+    failure_type: FailureType | None
+    counterexample: Counterexample | None
+    power_metrics: PowerMetrics
+    vacuity: VacuityReport
+    runtime_ms: int
+    tests_run: list[str]
+    notes: list[str]
 ```
 
-### 6.2 Case
-
-```json
-{
-  "initial_state": "string|array",
-  "config": {
-    "grid_length": 20,
-    "boundary": "periodic"
-  },
-  "metadata": {
-    "generator_family": "random_density_sweep",
-    "seed": 12345
-  }
-}
-```
-
-### 6.3 LawVerdict
-
-```json
-{
-  "law_id": "momentum_conservation",
-  "status": "PASS|FAIL|UNKNOWN",
-  "reason_code": "missing_observable|missing_transform|missing_generator_knob|ambiguous_claim|unmet_preconditions|resource_limit|inconclusive_low_power|null",
-  "evidence": {
-    "cases_attempted": 500,
-    "cases_used": 240,
-    "tests_run": ["random_density_sweep", "constrained_pair_interactions", "adversarial_mutation_search"],
-    "notes": []
-  },
-  "power_metrics": {
-    "collision_events_seen": 120,
-    "wrap_events_seen": 35,
-    "density_bins_hit": [0.1, 0.3, 0.6],
-    "violation_score_max": 0.0,
-    "vacuous": false,
-    "rival_discrimination": 0.4
-  },
-  "counterexample": null,
-  "artifacts": {
-    "first_failure": null,
-    "trajectory_excerpt": null
-  }
-}
-```
-
-### 6.4 Counterexample (when FAIL)
-
-```json
-{
-  "initial_state": "....><....",
-  "config": {"grid_length": 10, "boundary": "periodic"},
-  "seed": 9981,
-  "T": 12,
-  "t_fail": 3,
-  "witness": {
-    "state_before": "....><....",
-    "state_after":  "....X.....",
-    "observables": {"R_total_0": 1, "R_total_3": 2}
-  }
-}
+**Counterexample** (when FAIL):
+```python
+@dataclass
+class Counterexample:
+    initial_state: str           # e.g., "..><.."
+    config: dict[str, Any]       # grid_length, boundary
+    seed: int | None
+    t_max: int                   # Total time simulated
+    t_fail: int                  # Time step of violation
+    trajectory_excerpt: list[str] | None
+    observables_at_fail: dict[str, int] | None
+    witness: dict[str, Any] | None
+    minimized: bool
+    # PHASE-E additions:
+    formatted_witness: str | None
+    observables_at_t: dict[str, Any] | None
+    observables_at_t1: dict[str, Any] | None
+    neighborhood_hash: str | None
 ```
 
 ---
 
-## 7. Acceptance Criteria
+## 3. Supported Law Templates
 
-Tester Harness is considered correct when:
+All templates are implemented in `src/claims/templates.py`:
 
-1. It can evaluate all claim templates in R1 and returns correct FAIL on known falsifiable examples.
-2. For any FAIL verdict, it provides a **reproducible minimal counterexample** (R11, R12).
-3. UNKNOWN verdicts always include actionable reason codes and upgrade hints (R9).
-4. PASS verdicts are not vacuous:
+| Template | Checker Class | Semantics |
+|----------|---------------|-----------|
+| `invariant` | `InvariantChecker` | `∀t∈[0..T]: f(t) == f(0)` |
+| `monotone` | `MonotoneChecker` | `∀t∈[0..T-1]: f(t+1) ≤ f(t)` or `≥` |
+| `implication_step` | `ImplicationStepChecker` | `∀t∈[0..T-1]: P(t) → Q(t+1)` |
+| `implication_state` | `ImplicationStateChecker` | `∀t∈[0..T]: P(t) → Q(t)` |
+| `eventually` | `EventuallyChecker` | `∀t0: P(t0) → ∃t∈[t0..t0+H]: Q(t)` |
+| `symmetry_commutation` | `SymmetryCommutationChecker` | `evolve(T(S), t) == T(evolve(S, t))` |
+| `bound` | `BoundChecker` | `∀t∈[0..T]: f(t) ≤ k` or `≥` |
+| `local_transition` | `LocalTransitionChecker` | `∀t,i: state[i]==P → state[i+1] satisfies Q` |
 
-   * preconditions satisfied in enough cases
-   * relevant events occurred when needed (e.g., collisions for collision laws)
-   * otherwise PASS becomes UNKNOWN (R10)
-5. Harness is deterministic and reproducible across runs with the same seed/config (R12).
-6. Adversarial search finds counterexamples for a seeded set of “false laws” more reliably than pure random testing (measurable in regression suite).
+### Template Compilation
 
----
+The `ClaimCompiler` (`src/claims/compiler.py`) transforms `CandidateLaw` objects into `TemplateChecker` instances:
 
-## 8. Logging and Audit Requirements
-
-Harness must log per law evaluation:
-
-* law hash + law_id
-* selected test families + parameters
-* seed and config(s)
-* number of generated cases, precondition pass rate
-* first failing witness (if any)
-* power metrics summary
-* minimization steps (if enabled)
-* runtime and resource usage
-
-Logs must be human-auditable and sufficient to reconstruct the evaluation.
+1. Validates template-specific required fields
+2. Parses observable expressions via `ExprParser` (`src/claims/expr_parser.py`)
+3. Constructs precondition predicates
+4. Returns compiled checker or raises `CompilationError`
 
 ---
 
-## 9. Suggested Implementation PhasesTEST_
+## 4. Case Generation
 
-### Phase 1 (recommended MVP)
+### Generator Registry
 
-* claim compiler + predicate checker
-* random + constrained generators
-* metamorphic commutation tests
-* UNKNOWN reason codes
-* basic power metrics
-* counterexample minimization (simple)
+Generators are registered via `GeneratorRegistry` (`src/harness/generators/base.py`). Each generator implements:
 
-### Phase 2
+```python
+class Generator(ABC):
+    @abstractmethod
+    def generate(self, params: dict, seed: int, count: int) -> list[Case]
+```
 
-* adversarial mutation search (hillclimb)
-* small exhaustive enumeration for tiny N
-* richer instrumentation (event logs)
+### Implemented Generators
 
-### Phase 3 (optional)
+| Family | File | Purpose | Default Weight |
+|--------|------|---------|----------------|
+| `random_density_sweep` | `random_density.py` | Random states at target densities | 30% |
+| `constrained_pair_interactions` | `constrained_pairs.py` | Controlled particle pair setups | 20% |
+| `edge_wrapping_cases` | `edge_wrapping.py` | Boundary-crossing scenarios | 15% |
+| `symmetry_metamorphic_suite` | `symmetry_suite.py` | Metamorphic symmetry tests | 15% |
+| `pathological_cases` | `pathological.py` | Uniform grids, alternating patterns | 10% |
+| `extreme_states` | `extreme_states.py` | Max density, full collision grids | 10% |
 
-* sandboxed test-code execution
-* rival simulator discrimination scoring
+### Default Generation Strategy
+
+When a law provides no `proposed_tests`, the harness uses a multi-stage strategy:
+
+1. **Pathological baseline** (always first): ~20 cases from `pathological_cases`
+2. **Weighted distribution**: Remaining cases allocated by `generator_weights`
+
+This ensures uniform grids (which vacuously satisfy many laws) are always tested.
 
 ---
+
+## 5. Evaluation Flow
+
+### Case Evaluation (`src/harness/evaluator.py`)
+
+```python
+def evaluate_case(self, case: Case, time_horizon: int) -> CaseResult:
+    # 1. Check preconditions
+    if not self._check_preconditions(case.initial_state):
+        return CaseResult(passed=True, precondition_met=False, ...)
+
+    # 2. Run simulation
+    trajectory = run(case.initial_state, time_horizon)
+
+    # 3. Check law against trajectory
+    check_result = self._checker.check(trajectory)
+
+    # 4. Return result with vacuity tracking
+    return CaseResult(
+        passed=check_result.passed,
+        precondition_met=True,
+        violation=check_result.violation,
+        trajectory=trajectory,
+        vacuity=check_result.vacuity,
+    )
+```
+
+### Initial State Validation
+
+Before evaluation, the harness validates that initial states conform to universe rules:
+- No `X` cells at t=0 (collisions can only form during evolution)
+- Invalid states are skipped and logged as generator bugs
+
+---
+
+## 6. Verdict Determination
+
+The harness determines verdicts in `_determine_verdict()` (`src/harness/harness.py:391`):
+
+### FAIL Conditions
+- Counterexample found (via regular testing or adversarial search)
+- Returns `FailureType.LAW_COUNTEREXAMPLE` with minimized counterexample
+
+### UNKNOWN Conditions (with ReasonCodes)
+
+| ReasonCode | Condition |
+|------------|-----------|
+| `MISSING_OBSERVABLE` | Law requires unavailable observable |
+| `MISSING_TRANSFORM` | Law requires unavailable transform |
+| `AMBIGUOUS_CLAIM` | Compilation failed |
+| `UNMET_PRECONDITIONS` | `cases_used < min_cases_used_for_pass` (50) |
+| `VACUOUS_PASS` | Implication antecedent never held |
+| `INCONCLUSIVE_LOW_POWER` | `antecedent_true_count < 20` OR `trigger_diversity < 2` OR `coverage_score < 0.3` |
+
+### PASS Conditions
+All of the following must be true:
+- No counterexample found
+- `cases_used >= min_cases_used_for_pass` (50)
+- For implication templates: non-vacuous with sufficient trigger diversity
+- `coverage_score >= 0.3`
+- For `shift_k` symmetry: diverse k values tested
+
+---
+
+## 7. Power Metrics
+
+`PowerMetrics` (`src/harness/power.py`) tracks testing thoroughness:
+
+```python
+@dataclass
+class PowerMetrics:
+    cases_attempted: int = 0
+    cases_used: int = 0                    # Preconditions satisfied
+    cases_with_collisions: int = 0
+    cases_with_wrapping: int = 0
+    density_bins_hit: list[float] = []     # 0.0-1.0 in 0.1 increments
+    violation_score_max: float = 0.0
+    adversarial_cases_tried: int = 0
+    adversarial_found: bool = False
+    coverage_score: float = 0.0            # Computed weighted metric
+```
+
+### Coverage Score Calculation
+
+```python
+coverage_score = (
+    0.3 * usage_ratio +        # cases_used / cases_attempted
+    0.2 * collision_ratio +    # collision cases / used
+    0.1 * wrapping_ratio +     # wrapping cases / used
+    0.2 * density_coverage +   # density_bins_hit / 5
+    0.2 * non_vacuous_ratio    # 1 - vacuous_cases / used
+)
+```
+
+---
+
+## 8. Vacuity Tracking
+
+For implication templates (`implication_step`, `implication_state`, `eventually`, `local_transition`), the harness tracks vacuity via `VacuityReport` (`src/claims/vacuity.py`):
+
+```python
+@dataclass
+class VacuityReport:
+    total_checks: int = 0
+    antecedent_true_count: int = 0
+    consequent_evaluated_count: int = 0
+    is_vacuous: bool = False
+    trigger_diversity: int = 0             # Distinct generator families
+    triggering_generators: set[str] = set()
+    triggering_states: set[str] = set()    # Distinct triggering states
+```
+
+A PASS is downgraded to UNKNOWN if:
+- `is_vacuous` is True (antecedent never held)
+- `antecedent_true_count < min_antecedent_triggers` (default: 20)
+- `trigger_diversity < min_trigger_diversity` (default: 2 generator families)
+
+---
+
+## 9. Adversarial Search
+
+`AdversarialSearcher` (`src/harness/adversarial.py`) performs mutation-based counterexample search:
+
+1. Seeds from cases that "almost" failed (high violation scores)
+2. Applies mutations: symbol flips, insertions, deletions, shifts
+3. Evaluates mutated states against the law
+4. Terminates on counterexample or budget exhaustion
+
+Configuration:
+- `adversarial_budget`: 1500 mutations (default)
+- `max_runtime_ms`: Half of `max_runtime_ms_per_law`
+
+---
+
+## 10. Counterexample Minimization
+
+`Minimizer` (`src/harness/minimizer.py`) reduces counterexamples using delta-debugging:
+
+1. **Grid reduction**: Remove cells while preserving failure
+2. **Particle reduction**: Remove particles while preserving failure
+3. **Horizon reduction**: Find earliest failing time step
+
+Budget: `minimization_budget` (default: 300 attempts)
+
+---
+
+## 11. PHASE-E: Witness Capture
+
+The harness captures formatted witnesses for human-readable failure analysis:
+
+**Files**:
+- `src/harness/witness.py`: `build_formatted_witness()`, `compute_neighborhood_hash()`
+
+**Output Fields** (in `Counterexample`):
+- `formatted_witness`: Human-readable violation description
+- `observables_at_t`: Observable values at failure time
+- `observables_at_t1`: Observable values at t+1
+- `neighborhood_hash`: Content-based hash for diversity tracking
+
+---
+
+## 12. Persistence
+
+When a `Repository` is provided, the harness persists:
+
+1. **Case sets** (`case_sets` table): Generated test cases
+2. **Evaluations** (`evaluations` table): Verdict + power metrics
+3. **Counterexamples** (`counterexamples` table): Failure reproduction data
+4. **Law witnesses** (`law_witnesses` table): PHASE-E formatted witnesses
+5. **Audit log**: Operation tracking
+
+---
+
+## 13. Usage Example
+
+```python
+from src.harness.harness import Harness
+from src.harness.config import HarnessConfig
+from src.claims.schema import CandidateLaw
+
+# Configure harness
+config = HarnessConfig(
+    seed=42,
+    max_cases=300,
+    min_cases_used_for_pass=50,
+    enable_adversarial_search=True,
+)
+
+# Create harness
+harness = Harness(config)
+
+# Evaluate a law
+verdict = harness.evaluate(law)
+
+if verdict.status == "FAIL":
+    print(f"Falsified at t={verdict.counterexample.t_fail}")
+    print(f"Initial state: {verdict.counterexample.initial_state}")
+elif verdict.status == "PASS":
+    print(f"Passed with coverage {verdict.power_metrics.coverage_score:.2f}")
+else:
+    print(f"Unknown: {verdict.reason_code.value}")
+    print(f"Notes: {verdict.notes}")
+```
+
+---
+
+## 14. Determinism and Reproducibility
+
+Given identical:
+- `sim_hash` (universe simulator version)
+- `HarnessConfig` (especially seed)
+- `CandidateLaw`
+
+The harness produces identical verdicts and counterexamples.
+
+The harness logs:
+- `sim_hash`: From `src/universe/simulator.version_hash()`
+- `harness_config_hash`: From `HarnessConfig.content_hash()`
+- All random seeds used
+
+---
+
+## 15. Acceptance Criteria
+
+The harness is correct when:
+
+1. **True laws PASS non-vacuously**: Known conservation laws pass with sufficient power
+2. **False laws FAIL with counterexamples**: Known invalid laws are falsified with reproducible witnesses
+3. **UNKNOWN is actionable**: Every UNKNOWN includes a reason code and specific notes
+4. **Deterministic**: Same inputs → same outputs across runs
+5. **Vacuity protected**: Implication laws require antecedent triggers from multiple generators
+
+---
+
+## 16. Implementation Status
+
+| Requirement | Status | Notes |
+|-------------|--------|-------|
+| All 8 templates | ✅ Complete | Including LOCAL_TRANSITION |
+| 6 generator families | ✅ Complete | With configurable weights |
+| Precondition enforcement | ✅ Complete | Cases skipped if unmet |
+| Power metrics | ✅ Complete | Coverage score computed |
+| Vacuity detection | ✅ Complete | Trigger diversity tracked |
+| Adversarial search | ✅ Complete | Mutation-based |
+| Counterexample minimization | ✅ Complete | Delta-debugging |
+| PHASE-E witness capture | ✅ Complete | Formatted + neighborhood hash |
+| Database persistence | ✅ Complete | All tables implemented |
+| Reproducibility | ✅ Complete | Seeded RNG + version hashing |
+
+---
+
+## 17. Future Extensions (Not Implemented)
+
+- **Sandboxed LLM test code**: Execute tester-provided Python in isolation
+- **Rival simulator discrimination**: Test against rule variations
+- **Distributed execution**: Parallel harness across machines
