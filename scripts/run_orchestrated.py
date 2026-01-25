@@ -37,8 +37,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load environment variables (override=True ensures .env takes precedence over shell)
+load_dotenv(override=True)
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -100,6 +100,14 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="Laws to propose per iteration (default: 10)",
+    )
+
+    parser.add_argument(
+        "--num-workers",
+        "-w",
+        type=int,
+        default=1,
+        help="Number of parallel LLM workers for discovery (default: 1)",
     )
 
     parser.add_argument(
@@ -188,7 +196,10 @@ def run_orchestration(args) -> int:
     from src.harness.config import HarnessConfig
     from src.harness.harness import Harness
     from src.orchestration.engine import OrchestratorEngine
-    from src.orchestration.handlers.discovery_handler import DiscoveryPhaseHandler
+    from src.orchestration.handlers.discovery_handler import (
+        DiscoveryPhaseHandler,
+        DiscoveryPhaseConfig,
+    )
     from src.orchestration.phases import OrchestratorConfig, Phase
     from src.proposer.proposer import LawProposer, ProposerConfig
 
@@ -229,9 +240,10 @@ def run_orchestration(args) -> int:
             config.max_phase_iterations[phase] = args.max_phase_iterations
 
     # Create LLM loggers for capturing all LLM interactions
-    proposer_logger = LLMLogger(repo, component="law_proposer")
-    theorem_logger = LLMLogger(repo, component="theorem_generator")
-    explanation_logger = LLMLogger(repo, component="explanation_generator")
+    model_name = "gemini-2.5-flash" if not args.mock_llm else "mock"
+    proposer_logger = LLMLogger(repo, component="law_proposer", model_name=model_name)
+    theorem_logger = LLMLogger(repo, component="theorem_generator", model_name=model_name)
+    explanation_logger = LLMLogger(repo, component="explanation_generator", model_name=model_name)
 
     # Create components
     if args.mock_llm:
@@ -247,6 +259,21 @@ def run_orchestration(args) -> int:
         llm_logger=proposer_logger,
     )
 
+    # Seed redundancy filter with existing laws from database
+    existing_laws = repo.list_laws(limit=10000)
+    seeded_count = 0
+    for law_record in existing_laws:
+        try:
+            law_dict = json.loads(law_record.law_json)
+            from src.claims.schema import CandidateLaw
+            law = CandidateLaw(**law_dict)
+            proposer.add_known_law(law)
+            seeded_count += 1
+        except Exception:
+            pass  # Skip laws that can't be parsed
+    if seeded_count > 0 and args.verbose:
+        print(f"Seeded redundancy filter with {seeded_count} existing laws")
+
     harness = Harness(
         config=HarnessConfig(),
         repo=repo,
@@ -255,11 +282,13 @@ def run_orchestration(args) -> int:
     novelty_tracker = NoveltyTracker()
 
     # Create discovery handler
+    discovery_config = DiscoveryPhaseConfig(num_workers=args.num_workers)
     discovery_handler = DiscoveryPhaseHandler(
         proposer=proposer,
         harness=harness,
         novelty_tracker=novelty_tracker,
         repo=repo,
+        config=discovery_config,
     )
 
     # Create theorem handler
@@ -344,6 +373,8 @@ def run_orchestration(args) -> int:
     print(f"Max iterations: {config.max_total_iterations}")
     print(f"Discovery threshold: {config.discovery_to_theorem_threshold}")
     print(f"Laws per iteration: {config.laws_per_iteration}")
+    if args.num_workers > 1:
+        print(f"Parallel workers: {args.num_workers}")
     print()
 
     try:

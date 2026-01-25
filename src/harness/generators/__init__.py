@@ -9,6 +9,12 @@ from src.harness.generators.adversarial import (
     AdversarialMutationGenerator,
     GuidedAdversarialGenerator,
 )
+from src.harness.generators.precondition_breaker import (
+    PreconditionBreakingGenerator,
+    MultiplicityGenerator,
+    PeriodicBoundaryGenerator,
+    UniversalStressGenerator,
+)
 
 # Register all generators
 GeneratorRegistry.register("random_density_sweep", RandomDensityGenerator)
@@ -19,6 +25,12 @@ GeneratorRegistry.register("adversarial_mutation_search", AdversarialMutationGen
 GeneratorRegistry.register("guided_adversarial_search", GuidedAdversarialGenerator)
 GeneratorRegistry.register("pathological_cases", PathologicalGenerator)
 GeneratorRegistry.register("extreme_states", ExtremeStatesGenerator)
+# Adversarial generators for breaking narrow laws
+GeneratorRegistry.register("precondition_breaking", PreconditionBreakingGenerator)
+GeneratorRegistry.register("multiplicity_crowding", MultiplicityGenerator)
+GeneratorRegistry.register("periodic_boundary_stress", PeriodicBoundaryGenerator)
+# Universal stress states - mandatory tests run FIRST for every law
+GeneratorRegistry.register("universal_stress", UniversalStressGenerator)
 
 __all__ = [
     "Generator",
@@ -31,4 +43,8 @@ __all__ = [
     "SymmetryMetamorphicGenerator",
     "AdversarialMutationGenerator",
     "GuidedAdversarialGenerator",
+    "PreconditionBreakingGenerator",
+    "MultiplicityGenerator",
+    "PeriodicBoundaryGenerator",
+    "UniversalStressGenerator",
 ]

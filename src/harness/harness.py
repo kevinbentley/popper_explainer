@@ -9,8 +9,11 @@ The harness orchestrates:
 """
 
 import json
+import logging
 import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from src.claims.compiler import CompilationError
 from src.claims.schema import CandidateLaw, Template
@@ -242,7 +245,27 @@ class Harness:
         cases: list[Case] = []
         seed = self.config.seed
 
-        # CRITICAL: Always include pathological baseline cases first.
+        # CRITICAL: Always include UNIVERSAL STRESS TESTS first.
+        # These are mandatory cases that expose common AI blind spots:
+        # - ><><>< : Maximum collision / occupancy limits
+        # - >>.<<  : Multiplicity (4 particles merging into 1 cell)
+        # - XX     : Chain collisions without free movers (X-Battery)
+        # - ....>  : Circular topology (wrap-around)
+        universal_gen = GeneratorRegistry.create("universal_stress")
+        if universal_gen:
+            universal_params = self._get_default_params("universal_stress", law)
+            # Generate all canonical stress patterns (not counted against max_cases)
+            universal_cases = universal_gen.generate(
+                universal_params, seed, 50  # Get all canonical patterns + some scaled
+            )
+            cases.extend(universal_cases)
+            seed += len(universal_cases)
+            logger.debug(
+                f"Generated {len(universal_cases)} universal stress cases",
+                extra={"law_id": law.law_id},
+            )
+
+        # CRITICAL: Always include pathological baseline cases.
         # These catch false positives from generator coverage gaps (e.g., uniform grids).
         pathological_gen = GeneratorRegistry.create("pathological_cases")
         if pathological_gen:
@@ -331,6 +354,28 @@ class Harness:
                 "min_length": 1,
                 "max_length": 20,
                 "include_empty": True,
+            }
+        elif family_name == "universal_stress":
+            return {
+                "grid_lengths": [6, 8, 10, 12, 16],
+                "include_scaled": True,
+            }
+        elif family_name == "precondition_breaking":
+            return {
+                "target_precondition": "both",
+                "grid_lengths": [8, 12, 16, 20],
+                "collision_density": 0.2,
+            }
+        elif family_name == "multiplicity_crowding":
+            return {
+                "grid_lengths": [8, 12, 16, 24],
+                "max_convergence": 4,
+                "include_chain_reactions": True,
+            }
+        elif family_name == "periodic_boundary_stress":
+            return {
+                "grid_lengths": [4, 5, 6, 8, 10],
+                "focus_wrap_collision": True,
             }
         return {}
 

@@ -22,8 +22,12 @@ from src.harness.generators import (
     ConstrainedPairGenerator,
     EdgeWrappingGenerator,
     GeneratorRegistry,
+    MultiplicityGenerator,
+    PeriodicBoundaryGenerator,
+    PreconditionBreakingGenerator,
     RandomDensityGenerator,
     SymmetryMetamorphicGenerator,
+    UniversalStressGenerator,
 )
 from src.harness.harness import Harness
 from src.harness.power import PowerMetrics
@@ -144,6 +148,102 @@ class TestGenerators:
         gen = GeneratorRegistry.create("random_density_sweep")
         assert gen is not None
         assert isinstance(gen, RandomDensityGenerator)
+
+    def test_precondition_breaking_generator(self):
+        """Test generator that creates states violating common preconditions."""
+        gen = PreconditionBreakingGenerator()
+        assert gen.family_name() == "precondition_breaking"
+
+        cases = gen.generate({"n_range": [8, 16]}, seed=42, count=10)
+        assert len(cases) == 10
+
+        # Should generate states with collisions (X) or collision setups (><)
+        has_collision_state = False
+        for case in cases:
+            if "X" in case.initial_state or "><" in case.initial_state:
+                has_collision_state = True
+                break
+        assert has_collision_state
+
+    def test_multiplicity_crowding_generator(self):
+        """Test generator for many-to-one collision scenarios."""
+        gen = MultiplicityGenerator()
+        assert gen.family_name() == "multiplicity_crowding"
+
+        cases = gen.generate({"n_range": [10, 20]}, seed=42, count=10)
+        assert len(cases) == 10
+
+        # Should generate convergence patterns like >><<
+        has_convergence = False
+        for case in cases:
+            state = case.initial_state
+            # Check for multiple particles converging
+            if ">>" in state and "<<" in state:
+                has_convergence = True
+                break
+        assert has_convergence
+
+    def test_periodic_boundary_stress_generator(self):
+        """Test generator for boundary wrapping edge cases."""
+        gen = PeriodicBoundaryGenerator()
+        assert gen.family_name() == "periodic_boundary_stress"
+
+        cases = gen.generate({"n_range": [8, 16]}, seed=42, count=10)
+        assert len(cases) == 10
+
+        # Should generate states with particles at boundaries
+        has_boundary_particle = False
+        for case in cases:
+            state = case.initial_state
+            # Particle at start going left or particle at end going right
+            if state[0] == "<" or state[-1] == ">":
+                has_boundary_particle = True
+                break
+        assert has_boundary_particle
+
+    def test_adversarial_generators_registered(self):
+        """Test that all adversarial generators are properly registered."""
+        available = GeneratorRegistry.list_available()
+        assert "precondition_breaking" in available
+        assert "multiplicity_crowding" in available
+        assert "periodic_boundary_stress" in available
+        assert "universal_stress" in available
+
+    def test_universal_stress_generator(self):
+        """Test generator for universal stress patterns that must always pass."""
+        gen = UniversalStressGenerator()
+        assert gen.family_name() == "universal_stress"
+
+        cases = gen.generate({"include_scaled": False}, seed=42, count=100)
+
+        # Should include all canonical stress patterns
+        stress_types = {c.metadata.get("stress_type") for c in cases}
+        assert "max_collision" in stress_types  # ><><><
+        assert "multiplicity" in stress_types   # >>.<<
+        assert "x_battery" in stress_types      # XX
+        assert "wrap_right" in stress_types     # ....>
+        assert "wrap_left" in stress_types      # <....
+
+        # Verify actual patterns exist
+        states = {c.initial_state for c in cases}
+        assert "><><><" in states        # Max collision
+        assert ">>.<<" in states         # Multiplicity
+        assert "XX" in states            # X-Battery
+        assert "....>" in states         # Wrap right
+        assert "<...." in states         # Wrap left
+
+    def test_x_battery_patterns(self):
+        """Test that multiplicity generator includes X-Battery patterns."""
+        gen = MultiplicityGenerator()
+        cases = gen.generate({"grid_lengths": [8, 10]}, seed=42, count=20)
+
+        # Should include X-Battery patterns (adjacent X cells)
+        has_x_battery = False
+        for c in cases:
+            if "XX" in c.initial_state:
+                has_x_battery = True
+                break
+        assert has_x_battery, "Should include X-Battery patterns with adjacent X cells"
 
 
 class TestHarnessConfig:

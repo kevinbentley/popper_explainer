@@ -2,15 +2,21 @@
 
 Wraps the existing LawProposer and Harness to produce
 ControlBlock outputs compatible with the orchestration engine.
+
+Supports parallel workers for faster law discovery - multiple
+LLM calls run concurrently and results are deduplicated.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from src.claims.schema import CandidateLaw
+from src.db.models import NoveltySnapshotRecord
 from src.discovery.novelty import NoveltyTracker
 from src.harness.harness import Harness
 from src.harness.verdict import LawVerdict
@@ -27,6 +33,21 @@ from src.proposer.proposer import LawProposer, ProposalRequest
 
 if TYPE_CHECKING:
     from src.db.repo import Repository
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DiscoveryPhaseConfig:
+    """Configuration for discovery phase handler.
+
+    Attributes:
+        num_workers: Number of parallel LLM workers (default 1 = sequential)
+        dedupe_by_fingerprint: Whether to deduplicate by law fingerprint
+    """
+
+    num_workers: int = 1
+    dedupe_by_fingerprint: bool = True
 
 
 @dataclass
@@ -61,6 +82,7 @@ class DiscoveryPhaseHandler:
         harness: Harness,
         novelty_tracker: NoveltyTracker | None = None,
         repo: Repository | None = None,
+        config: DiscoveryPhaseConfig | None = None,
     ):
         """Initialize discovery handler.
 
@@ -69,11 +91,13 @@ class DiscoveryPhaseHandler:
             harness: Harness for evaluating laws
             novelty_tracker: Optional NoveltyTracker for saturation detection
             repo: Optional repository for persistence
+            config: Phase configuration (num_workers, etc.)
         """
         self.proposer = proposer
         self.harness = harness
         self.novelty_tracker = novelty_tracker
         self.repo = repo
+        self.config = config or DiscoveryPhaseConfig()
 
     @property
     def phase(self) -> Phase:
@@ -82,24 +106,36 @@ class DiscoveryPhaseHandler:
     def run_iteration(self, context: PhaseContext) -> ControlBlock:
         """Execute one discovery iteration.
 
+        If num_workers > 1, runs multiple proposer calls in parallel
+        and deduplicates the results before evaluation.
+
         Args:
             context: PhaseContext with run state
 
         Returns:
             ControlBlock with phase outputs and recommendations
         """
-        # Build memory snapshot
+        # Build memory snapshot (shared across all workers)
         memory = self._build_memory(context)
 
         # Check for targeted requests from theorem phase
         request = self._build_request(context)
 
-        # Propose laws
-        batch = self.proposer.propose(memory, request)
+        # Propose laws (parallel if num_workers > 1)
+        if self.config.num_workers > 1:
+            all_laws, total_rejections, total_redundant, warnings = self._propose_parallel(
+                memory, request
+            )
+        else:
+            batch = self.proposer.propose(memory, request)
+            all_laws = batch.laws
+            total_rejections = len(batch.rejections)
+            total_redundant = len(batch.redundant)
+            warnings = batch.warnings
 
         # Evaluate proposed laws
         verdicts: list[tuple[CandidateLaw, LawVerdict]] = []
-        for law in batch.laws:
+        for law in all_laws:
             verdict = self.harness.evaluate(law)
             verdicts.append((law, verdict))
 
@@ -112,10 +148,148 @@ class DiscoveryPhaseHandler:
                 self._persist_evaluation(context.run_id, law, verdict)
 
         # Build result
-        result = self._build_result(batch, verdicts)
+        result = self._build_result_from_parallel(
+            all_laws, verdicts, total_rejections, total_redundant, warnings
+        )
+
+        # Persist novelty snapshot for ReadinessComputer to pick up
+        if self.repo:
+            self._persist_novelty_snapshot(result)
 
         # Build control block
         return self._build_control_block(result, context)
+
+    def _propose_parallel(
+        self,
+        memory: DiscoveryMemorySnapshot,
+        request: ProposalRequest,
+    ) -> tuple[list[CandidateLaw], int, int, list[str]]:
+        """Run multiple proposer calls in parallel and deduplicate results.
+
+        Note: LLM logging is disabled during parallel execution because:
+        1. SQLite connections can't cross thread boundaries
+        2. The proposer's last_exchange state has race conditions
+
+        For detailed LLM logs, use single-worker mode (--num-workers 1).
+
+        Args:
+            memory: Discovery memory snapshot
+            request: Proposal request
+
+        Returns:
+            Tuple of (deduplicated_laws, total_rejections, total_redundant, warnings)
+        """
+        all_laws: list[CandidateLaw] = []
+        total_rejections = 0
+        total_redundant = 0
+        warnings: list[str] = []
+        seen_law_ids: set[str] = set()
+        duplicates_removed = 0
+
+        # Save and temporarily disable LLM logger to avoid threading issues
+        saved_logger = getattr(self.proposer, '_llm_logger', None)
+        if saved_logger:
+            self.proposer.set_llm_logger(None)
+
+        def worker_task(worker_id: int):
+            """Single worker task."""
+            logger.debug(f"Worker {worker_id} starting proposal")
+            return self.proposer.propose(memory, request)
+
+        try:
+            # Run workers in parallel
+            with ThreadPoolExecutor(max_workers=self.config.num_workers) as executor:
+                futures = {
+                    executor.submit(worker_task, i): i
+                    for i in range(self.config.num_workers)
+                }
+
+                for future in as_completed(futures):
+                    worker_id = futures[future]
+                    try:
+                        batch = future.result()
+                        logger.debug(
+                            f"Worker {worker_id} proposed {len(batch.laws)} laws"
+                        )
+
+                        # Add laws, deduplicating by law_id
+                        for law in batch.laws:
+                            if law.law_id not in seen_law_ids:
+                                seen_law_ids.add(law.law_id)
+                                all_laws.append(law)
+                            else:
+                                duplicates_removed += 1
+
+                        total_rejections += len(batch.rejections)
+                        total_redundant += len(batch.redundant)
+                        warnings.extend(batch.warnings)
+
+                    except Exception as e:
+                        logger.error(f"Worker {worker_id} failed: {e}")
+                        warnings.append(f"Worker {worker_id} failed: {e}")
+
+        finally:
+            # Restore LLM logger
+            if saved_logger:
+                self.proposer.set_llm_logger(saved_logger)
+
+        if duplicates_removed > 0:
+            logger.info(
+                f"Parallel discovery: {self.config.num_workers} workers, "
+                f"{len(all_laws)} unique laws, {duplicates_removed} duplicates removed"
+            )
+
+        return all_laws, total_rejections, total_redundant, warnings
+
+    def _build_result_from_parallel(
+        self,
+        laws: list[CandidateLaw],
+        verdicts: list[tuple[CandidateLaw, LawVerdict]],
+        total_rejections: int,
+        total_redundant: int,
+        warnings: list[str],
+    ) -> DiscoveryIterationResult:
+        """Build iteration result from parallel worker output.
+
+        Args:
+            laws: All proposed laws (deduplicated)
+            verdicts: Law/verdict pairs
+            total_rejections: Total rejections across all workers
+            total_redundant: Total redundant across all workers
+            warnings: All warnings
+
+        Returns:
+            DiscoveryIterationResult
+        """
+        # Count verdicts by status
+        passed = sum(1 for _, v in verdicts if v.status == "PASS")
+        failed = sum(1 for _, v in verdicts if v.status == "FAIL")
+        unknown = sum(1 for _, v in verdicts if v.status == "UNKNOWN")
+
+        # Get novelty stats
+        novelty_stats = {}
+        is_saturated = False
+        if self.novelty_tracker:
+            stats = self.novelty_tracker.get_window_stats()
+            novelty_stats = {
+                "combined_novelty_rate": stats.combined_novelty_rate,
+                "syntactic_novelty_rate": stats.syntactic_novelty_rate,
+                "semantic_novelty_rate": stats.semantic_novelty_rate,
+                "total_laws": stats.total_laws,
+            }
+            is_saturated = self.novelty_tracker.is_saturated()
+
+        return DiscoveryIterationResult(
+            laws_proposed=len(laws),
+            laws_passed=passed,
+            laws_failed=failed,
+            laws_unknown=unknown,
+            laws_rejected=total_rejections,
+            laws_redundant=total_redundant,
+            novelty_stats=novelty_stats,
+            is_saturated=is_saturated,
+            verdicts=verdicts,
+        )
 
     def can_handle_requests(self, requests: list[PhaseRequest]) -> bool:
         """Check if this handler can process requests.
@@ -149,37 +323,66 @@ class DiscoveryPhaseHandler:
         counterexample_gallery: list[dict[str, Any]] = []
 
         if context.repo:
+            # Track seen law_ids to avoid duplicates
+            seen_accepted: set[str] = set()
+            seen_falsified: set[str] = set()
+
+            # Helper to render claim as readable text
+            def render_claim(law_dict: dict) -> str:
+                claim_text = law_dict.get("claim", "")
+                if claim_text == "(see claim_ast)" and law_dict.get("claim_ast"):
+                    from src.claims.ast_schema import ast_to_string
+                    try:
+                        claim_text = ast_to_string(law_dict["claim_ast"])
+                    except Exception:
+                        claim_text = str(law_dict["claim_ast"])
+                return claim_text
+
             # Get recent PASS laws
             pass_evals = context.repo.list_evaluations(status="PASS", limit=50)
             for ev in pass_evals:
+                if ev.law_id in seen_accepted:
+                    continue
+                seen_accepted.add(ev.law_id)
+
                 law_record = context.repo.get_law(ev.law_id)
                 if law_record:
                     law_dict = json.loads(law_record.law_json)
                     accepted_laws.append({
                         "law_id": ev.law_id,
                         "template": law_record.template,
-                        "claim": law_dict.get("claim", ""),
+                        "claim": render_claim(law_dict),
+                        "observables": law_dict.get("observables", []),
                     })
 
             # Get recent FAIL laws with counterexamples
             fail_evals = context.repo.list_evaluations(status="FAIL", limit=30)
             for ev in fail_evals:
+                if ev.law_id in seen_falsified:
+                    continue
+                seen_falsified.add(ev.law_id)
+
                 law_record = context.repo.get_law(ev.law_id)
                 if law_record:
                     law_dict = json.loads(law_record.law_json)
                     falsified_laws.append({
                         "law_id": ev.law_id,
                         "template": law_record.template,
-                        "claim": law_dict.get("claim", ""),
+                        "claim": render_claim(law_dict),
+                        "observables": law_dict.get("observables", []),
                     })
 
-                    # Get counterexample
+                    # Get counterexample with claim context
                     cex = context.repo.get_counterexample_for_evaluation(ev.id)
                     if cex:
                         counterexample_gallery.append({
                             "law_id": ev.law_id,
+                            "template": law_record.template,
+                            "claim": render_claim(law_dict),
+                            "forbidden": law_dict.get("forbidden", ""),
                             "initial_state": cex.initial_state,
                             "t_fail": cex.t_fail,
+                            "trajectory_excerpt": cex.trajectory_excerpt_json,
                         })
 
         return DiscoveryMemorySnapshot(
@@ -275,10 +478,18 @@ class DiscoveryPhaseHandler:
         # Compute readiness suggestion
         readiness = self._compute_readiness_suggestion(result)
 
-        # Determine recommendation
+        # Calculate redundancy rate
+        total_from_llm = result.laws_proposed + result.laws_redundant
+        redundancy_rate = result.laws_redundant / total_from_llm if total_from_llm > 0 else 0.0
+
+        # Determine recommendation - high redundancy is a key saturation signal
         if result.is_saturated:
             recommendation = PhaseRecommendation.ADVANCE
             stop_reason = StopReason.SATURATION
+        elif redundancy_rate > 0.7:
+            # Most LLM proposals are duplicates - time to move on
+            recommendation = PhaseRecommendation.ADVANCE
+            stop_reason = StopReason.HIGH_REDUNDANCY
         elif result.novelty_stats.get("combined_novelty_rate", 1.0) < 0.2:
             recommendation = PhaseRecommendation.ADVANCE
             stop_reason = StopReason.HIGH_REDUNDANCY
@@ -304,13 +515,26 @@ class DiscoveryPhaseHandler:
                     note=f"FAIL at t={verdict.counterexample.t_fail}" if verdict.counterexample else "FAIL",
                 ))
 
-        # Build justification
-        novelty_rate = result.novelty_stats.get("combined_novelty_rate", 1.0)
+        # Build justification - include redundancy in novelty calculation
+        # Effective novelty = proposed / (proposed + redundant)
+        total_from_llm = result.laws_proposed + result.laws_redundant
+        effective_novelty = result.laws_proposed / total_from_llm if total_from_llm > 0 else 1.0
+        redundancy_rate = result.laws_redundant / total_from_llm if total_from_llm > 0 else 0.0
+
+        if redundancy_rate > 0.7:
+            saturation_msg = "High redundancy - approaching saturation."
+        elif redundancy_rate > 0.5:
+            saturation_msg = "Moderate redundancy - consider advancing soon."
+        elif result.is_saturated:
+            saturation_msg = "Saturated - ready to advance."
+        else:
+            saturation_msg = "Still discovering novel laws."
+
         justification = (
-            f"Proposed {result.laws_proposed} laws: "
+            f"Proposed {result.laws_proposed} laws ({result.laws_redundant} redundant filtered): "
             f"{result.laws_passed} PASS, {result.laws_failed} FAIL, {result.laws_unknown} UNKNOWN. "
-            f"Novelty rate: {novelty_rate:.1%}. "
-            f"{'Saturated - ready to advance.' if result.is_saturated else 'Still discovering novel laws.'}"
+            f"Effective novelty: {effective_novelty:.1%}. "
+            f"{saturation_msg}"
         )
 
         return ControlBlock(
@@ -328,6 +552,8 @@ class DiscoveryPhaseHandler:
                 "laws_unknown": result.laws_unknown,
                 "laws_rejected": result.laws_rejected,
                 "laws_redundant": result.laws_redundant,
+                "redundancy_rate": redundancy_rate,
+                "effective_novelty": effective_novelty,
                 "novelty_stats": result.novelty_stats,
                 "is_saturated": result.is_saturated,
             },
@@ -341,6 +567,11 @@ class DiscoveryPhaseHandler:
 
         This is advisory - the orchestrator computes objective readiness.
 
+        Factors in:
+        - Redundancy rate (high = saturation signal)
+        - Pass rate of proposed laws
+        - Unknown rate (too many = harness issues)
+
         Args:
             result: Iteration result
 
@@ -353,7 +584,19 @@ class DiscoveryPhaseHandler:
         if result.is_saturated:
             base = 90
 
-        # Boost for low novelty rate
+        # Calculate effective novelty including redundancy
+        total_from_llm = result.laws_proposed + result.laws_redundant
+        redundancy_rate = result.laws_redundant / total_from_llm if total_from_llm > 0 else 0.0
+
+        # High redundancy is a strong saturation signal
+        if redundancy_rate > 0.8:
+            base = max(base, 90)  # Very high - definitely saturated
+        elif redundancy_rate > 0.6:
+            base = max(base, 80)  # High - approaching saturation
+        elif redundancy_rate > 0.4:
+            base = max(base, 70)  # Moderate - consider advancing
+
+        # Boost for low novelty rate (from novelty tracker)
         novelty_rate = result.novelty_stats.get("combined_novelty_rate", 1.0)
         if novelty_rate < 0.1:
             base = max(base, 85)
@@ -373,6 +616,56 @@ class DiscoveryPhaseHandler:
                 base = max(base - 15, 30)
 
         return base
+
+    def _persist_novelty_snapshot(self, result: DiscoveryIterationResult) -> None:
+        """Persist novelty snapshot for ReadinessComputer to use.
+
+        This bridges the gap between the proposer's redundancy tracking
+        and the objective readiness computation.
+
+        Args:
+            result: Discovery iteration result with redundancy data
+        """
+        if not self.repo:
+            logger.debug("No repo, skipping novelty snapshot")
+            return
+
+        # Calculate metrics from result
+        total_from_llm = result.laws_proposed + result.laws_redundant
+        logger.debug(f"Novelty snapshot: proposed={result.laws_proposed}, redundant={result.laws_redundant}, total={total_from_llm}")
+        if total_from_llm == 0:
+            logger.debug("Total from LLM is 0, skipping novelty snapshot")
+            return  # Nothing to record
+
+        syntactic_novelty_rate = result.laws_proposed / total_from_llm
+        semantic_novelty_rate = syntactic_novelty_rate  # Same for now
+        combined_novelty_rate = syntactic_novelty_rate
+
+        # Get novelty tracker stats if available
+        total_laws_seen = 0
+        unique_syntactic = 0
+        unique_semantic = 0
+        if self.novelty_tracker:
+            stats = self.novelty_tracker.get_window_stats()
+            total_laws_seen = stats.total_laws
+            unique_syntactic = stats.syntactically_novel
+            unique_semantic = stats.semantically_novel
+
+        snapshot = NoveltySnapshotRecord(
+            window_size=total_from_llm,
+            total_laws_in_window=total_from_llm,
+            syntactically_novel_count=result.laws_proposed,
+            semantically_novel_count=result.laws_proposed,
+            fully_novel_count=result.laws_proposed,
+            syntactic_novelty_rate=syntactic_novelty_rate,
+            semantic_novelty_rate=semantic_novelty_rate,
+            combined_novelty_rate=combined_novelty_rate,
+            is_saturated=result.is_saturated or combined_novelty_rate < 0.3,
+            total_laws_seen=total_laws_seen,
+            unique_syntactic_fingerprints=unique_syntactic,
+            unique_semantic_signatures=unique_semantic,
+        )
+        self.repo.insert_novelty_snapshot(snapshot)
 
     def _persist_evaluation(
         self,

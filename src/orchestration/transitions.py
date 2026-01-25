@@ -13,7 +13,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.orchestration.control_block import ControlBlock, PhaseRecommendation
+from src.orchestration.control_block import ControlBlock, PhaseRecommendation, StopReason
 from src.orchestration.phases import Phase, OrchestratorConfig
 from src.orchestration.readiness import ReadinessMetrics
 
@@ -332,24 +332,45 @@ class TransitionPolicy:
 
         score = readiness.combined_score * 100
 
+        # Check for saturation override - high redundancy is a strong signal
+        # that discovery has exhausted its search space
+        effective_threshold = rule.min_readiness
+        is_saturation_override = False
+
+        if control_block.stop_reason in (StopReason.HIGH_REDUNDANCY, StopReason.SATURATION):
+            # Allow transition at lower threshold when saturated
+            # Requires at least 60% readiness and high redundancy signal
+            saturation_threshold = max(60.0, rule.min_readiness - 25.0)
+            if score >= saturation_threshold and readiness.s_redundancy >= 0.5:
+                effective_threshold = saturation_threshold
+                is_saturation_override = True
+
         # Check readiness threshold
-        if score < rule.min_readiness:
+        if score < effective_threshold:
             return TransitionDecision(
                 should_transition=False,
-                reason=f"Readiness {score:.1f} below threshold {rule.min_readiness}",
-                evidence={"readiness": score, "threshold": rule.min_readiness},
+                reason=f"Readiness {score:.1f} below threshold {effective_threshold}",
+                evidence={
+                    "readiness": score,
+                    "threshold": effective_threshold,
+                    "base_threshold": rule.min_readiness,
+                    "saturation_override": is_saturation_override,
+                },
             )
 
         # Check hysteresis (consecutive rounds above threshold)
-        if not self._check_hysteresis(current_phase, rule.min_readiness, rule.consecutive_rounds):
+        # Use reduced rounds for saturation override (discovery exhausted faster)
+        required_rounds = 2 if is_saturation_override else rule.consecutive_rounds
+        if not self._check_hysteresis(current_phase, effective_threshold, required_rounds):
             history = self._readiness_history.get(current_phase, [])
-            above_threshold = sum(1 for s in history[-rule.consecutive_rounds:] if s >= rule.min_readiness)
+            above_threshold = sum(1 for s in history[-required_rounds:] if s >= effective_threshold)
             return TransitionDecision(
                 should_transition=False,
-                reason=f"Only {above_threshold}/{rule.consecutive_rounds} consecutive rounds above threshold",
+                reason=f"Only {above_threshold}/{required_rounds} consecutive rounds above threshold",
                 evidence={
-                    "readiness_history": history[-rule.consecutive_rounds:],
-                    "required_rounds": rule.consecutive_rounds,
+                    "readiness_history": history[-required_rounds:],
+                    "required_rounds": required_rounds,
+                    "saturation_override": is_saturation_override,
                 },
             )
 
@@ -362,7 +383,9 @@ class TransitionPolicy:
             )
 
         # Check novel counterexample rate (for discovery)
-        if readiness.s_novel_cex > rule.max_novel_cex_rate:
+        # Skip this check during saturation override - when proposal redundancy is high,
+        # we can't make progress even if we're still finding counterexamples
+        if not is_saturation_override and readiness.s_novel_cex > rule.max_novel_cex_rate:
             return TransitionDecision(
                 should_transition=False,
                 reason=f"Novel CEX rate {readiness.s_novel_cex:.2f} > {rule.max_novel_cex_rate}",
@@ -370,16 +393,26 @@ class TransitionPolicy:
             )
 
         # All conditions met - advance
+        trigger = "saturation_override" if is_saturation_override else "readiness_threshold"
+        reason = (
+            f"Saturation detected (redundancy={readiness.s_redundancy:.0%}), "
+            f"readiness {score:.1f} above reduced threshold {effective_threshold}"
+            if is_saturation_override
+            else f"Readiness {score:.1f} sustained above {effective_threshold} for {required_rounds} rounds"
+        )
         return TransitionDecision(
             should_transition=True,
             target_phase=rule.to_phase,
-            trigger="readiness_threshold",
-            reason=f"Readiness {score:.1f} sustained above {rule.min_readiness} for {rule.consecutive_rounds} rounds",
+            trigger=trigger,
+            reason=reason,
             evidence={
                 "readiness": score,
-                "threshold": rule.min_readiness,
-                "consecutive_rounds": rule.consecutive_rounds,
+                "threshold": effective_threshold,
+                "base_threshold": rule.min_readiness,
+                "consecutive_rounds": required_rounds,
                 "llm_alignment": True,
+                "saturation_override": is_saturation_override,
+                "redundancy": readiness.s_redundancy,
             },
         )
 

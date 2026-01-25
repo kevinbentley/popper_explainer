@@ -63,7 +63,38 @@ class UniverseContract:
 
 SYSTEM_INSTRUCTION = """You are a scientific law discovery system. Your task is to propose testable, falsifiable candidate laws about a simulated universe.
 
-CRITICAL RULES:
+=== POPPERIAN EPISTEMOLOGY - READ CAREFULLY ===
+
+This system follows Popperian falsificationism. You MUST understand:
+
+1. LAWS CAN ONLY BE FALSIFIED, NEVER PROVEN.
+   A law that "passes" our tests is NOT proven true. It simply means:
+   - We tried to find a counterexample and failed
+   - The law survived the specific tests we ran
+   - It could still be false - we just haven't found the right counterexample yet
+
+2. FAILED LAWS ARE MORE INFORMATIVE THAN PASSED LAWS.
+   When a law FAILS, we learn something definite: the law is FALSE.
+   When a law PASSES, we learn almost nothing: it might be true, or we might
+   just not have tested the right cases. Therefore:
+   - Study the COUNTEREXAMPLE GALLERY carefully - these are your best teachers
+   - Failed laws reveal the TRUE physics of this universe
+   - Passed laws only tell you what ISN'T obviously wrong
+
+3. THIS IS A SYNTHETIC UNIVERSE - NOT REAL PHYSICS.
+   DO NOT assume this universe follows Earth physics, conservation laws,
+   or intuitions from the real world. The rules here may be:
+   - Completely different from anything you've seen
+   - Counter-intuitive or "strange" by human standards
+   - Discoverable ONLY through observation and falsification
+
+4. NARROW PRECONDITIONS ARE SUSPICIOUS.
+   If you find yourself writing laws with many preconditions to avoid
+   counterexamples, you're probably missing the true underlying law.
+   The real laws of this universe are likely simpler and more universal.
+   Let the counterexamples guide you toward the truth.
+
+=== CRITICAL RULES ===
 1. You must ONLY output a JSON array of CandidateLaw objects. No prose, no markdown, no explanations.
 2. You must NOT propose axioms, mechanisms, definitions, or update rules. Only propose CLAIMS that can be tested.
 3. Every law must include a "forbidden" field describing what would falsify it.
@@ -389,7 +420,12 @@ For symmetry_commutation: include "transform" field, claim_ast can be null."""
 
     def _build_accepted_section(self, laws: list[dict[str, Any]]) -> str:
         """Build accepted laws section."""
-        lines = ["=== ACCEPTED LAWS (do not repeat these or equivalent variations) ==="]
+        lines = [
+            "=== ACCEPTED LAWS (not yet falsified - but NOT proven true!) ===",
+            "These laws survived our tests, but remember: PASS does not mean TRUE.",
+            "They simply haven't been falsified YET. Do not repeat these.",
+            "",
+        ]
         for law in laws:
             lines.append(f"- [{law['template']}] {law['law_id']}: {law['claim']}")
             # Show observable definitions to prevent equivalent re-proposals
@@ -400,7 +436,13 @@ For symmetry_commutation: include "transform" field, claim_ast can be null."""
 
     def _build_falsified_section(self, laws: list[dict[str, Any]]) -> str:
         """Build falsified laws section."""
-        lines = ["=== FALSIFIED LAWS (do not repeat these or equivalent variations) ==="]
+        lines = [
+            "=== FALSIFIED LAWS (STUDY THESE CAREFULLY - they reveal true physics!) ===",
+            "These laws are DEFINITELY FALSE. Each counterexample teaches you something",
+            "concrete about this universe. Ask yourself: WHY did this law fail?",
+            "What does the counterexample reveal about the true underlying physics?",
+            "",
+        ]
         for law in laws:
             cx = law.get("counterexample", {})
             lines.append(
@@ -412,7 +454,8 @@ For symmetry_commutation: include "transform" field, claim_ast can be null."""
                 if obs_strs:
                     lines.append(f"    observables: {', '.join(obs_strs)}")
             if cx:
-                lines.append(f"    counterexample: state='{cx.get('initial_state', '?')}', t_fail={cx.get('t_fail', '?')}")
+                lines.append(f"    COUNTEREXAMPLE: state='{cx.get('initial_state', '?')}', failed at t={cx.get('t_fail', '?')}")
+                lines.append(f"    ^ This state PROVES the law is false. What does it teach you?")
         return "\n".join(lines)
 
     def _build_unknown_section(self, laws: list[dict[str, Any]]) -> str:
@@ -424,13 +467,52 @@ For symmetry_commutation: include "transform" field, claim_ast can be null."""
         return "\n".join(lines)
 
     def _build_counterexamples_section(self, examples: list[dict[str, Any]]) -> str:
-        """Build counterexamples gallery section."""
-        lines = ["=== COUNTEREXAMPLE GALLERY ==="]
+        """Build counterexamples gallery section.
+
+        Shows falsified claims with their counterexamples so the LLM can
+        learn what kinds of claims fail and why.
+        """
+        lines = [
+            "=== COUNTEREXAMPLE GALLERY (YOUR MOST VALUABLE RESOURCE!) ===",
+            "These claims were FALSIFIED by specific counterexamples.",
+            "",
+            "IMPORTANT: Each counterexample is a FACT about this universe.",
+            "- The claim is DEFINITELY FALSE (we have proof)",
+            "- The counterexample state and timestep reveal true physics",
+            "- Study the trajectory to understand WHY the law failed",
+            "- Ask: What assumption was wrong? What's the real pattern?",
+            "",
+            "DO NOT just avoid these exact laws - learn the DEEPER LESSON:",
+            "- If many laws about X fail, your model of X is probably wrong",
+            "- Look for patterns in what kinds of states cause failures",
+            "- The simplest explanation that fits ALL counterexamples is best",
+            "",
+        ]
         for i, cx in enumerate(examples[:10]):  # Limit to 10
-            lines.append(f"{i+1}. state='{cx.get('initial_state', '?')}', t_fail={cx.get('t_fail', '?')}")
-            if cx.get("trajectory_excerpt"):
-                excerpt = cx["trajectory_excerpt"][:5]
-                lines.append(f"   trajectory: {' -> '.join(excerpt)}")
+            template = cx.get("template", "?")
+            claim = cx.get("claim", "?")
+            forbidden = cx.get("forbidden", "")
+            initial = cx.get("initial_state", "?")
+            t_fail = cx.get("t_fail", "?")
+
+            lines.append(f"{i+1}. [{template}] CLAIM: {claim}")
+            if forbidden:
+                lines.append(f"   FORBIDDEN: {forbidden}")
+            lines.append(f"   FALSIFIED BY: state='{initial}' at t={t_fail}")
+
+            # Show trajectory if available
+            trajectory = cx.get("trajectory_excerpt")
+            if trajectory:
+                if isinstance(trajectory, str):
+                    import json as json_lib
+                    try:
+                        trajectory = json_lib.loads(trajectory)
+                    except Exception:
+                        trajectory = None
+                if trajectory and isinstance(trajectory, list):
+                    excerpt = trajectory[:5]
+                    lines.append(f"   TRAJECTORY: {' → '.join(excerpt)}")
+            lines.append("")
         return "\n".join(lines)
 
     def _build_request_section(
@@ -444,11 +526,18 @@ For symmetry_commutation: include "transform" field, claim_ast can be null."""
             "=== YOUR TASK ===",
             f"Propose {count} NEW candidate laws.",
             "",
+            "REMEMBER THE POPPERIAN PRINCIPLES:",
+            "- You are trying to DISCOVER truth through FALSIFICATION",
+            "- Study the counterexamples - they are your best teachers",
+            "- Don't assume this universe works like Earth physics",
+            "- Simpler, universal laws are better than complex conditional ones",
+            "",
             "Requirements:",
             "- Each law must be testable and falsifiable",
             "- Include a forbidden condition describing what would disprove it",
             "- Do not repeat accepted or falsified laws",
-            "- Prioritize risky, discriminating laws over safe ones",
+            "- Prioritize RISKY, easily-falsifiable laws over safe ones",
+            "- If a law seems too safe (hard to falsify), it's probably not useful",
         ]
 
         if target_templates:

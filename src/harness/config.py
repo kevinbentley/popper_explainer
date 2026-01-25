@@ -41,13 +41,21 @@ class HarnessConfig:
     # Generator weights for default strategy
     # pathological_cases is critical for catching false positives from uniform grids
     # extreme_states helps trigger rare antecedents in implication laws
+    # Adversarial generators target common AI blind spots:
+    #   - precondition_breaking: tests laws with narrow preconditions (e.g., CollisionCells==0)
+    #   - multiplicity_crowding: tests many-to-one collisions (>>.<<)
+    #   - periodic_boundary_stress: tests wrap-around at N-1 to 0 boundary
     generator_weights: dict[str, float] = field(default_factory=lambda: {
-        "random_density_sweep": 0.30,
-        "constrained_pair_interactions": 0.20,
-        "edge_wrapping_cases": 0.15,
-        "symmetry_metamorphic_suite": 0.15,
-        "pathological_cases": 0.10,  # Uniform grids, alternating patterns, edge cases
-        "extreme_states": 0.10,  # Full collision grids, max density states
+        "random_density_sweep": 0.22,
+        "constrained_pair_interactions": 0.14,
+        "edge_wrapping_cases": 0.10,
+        "symmetry_metamorphic_suite": 0.12,
+        "pathological_cases": 0.08,  # Uniform grids, alternating patterns, edge cases
+        "extreme_states": 0.08,  # Full collision grids, max density states
+        # Adversarial generators for breaking narrow laws
+        "precondition_breaking": 0.08,  # Test with preconditions violated
+        "multiplicity_crowding": 0.08,  # Many-to-one collision scenarios
+        "periodic_boundary_stress": 0.10,  # Boundary wrapping edge cases
     })
 
     def content_hash(self) -> str:

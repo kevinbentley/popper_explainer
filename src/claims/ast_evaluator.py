@@ -657,9 +657,15 @@ def create_ast_checker(law: CandidateLaw) -> ASTClaimEvaluator | None:
         law: The candidate law
 
     Returns:
-        ASTClaimEvaluator if claim_ast is present, None otherwise
+        ASTClaimEvaluator if claim_ast is present and template is supported,
+        None otherwise (falls back to string-based compilation)
     """
     if law.claim_ast is None:
+        return None
+
+    # Symmetry_commutation requires special handling via SymmetryCommutationChecker
+    # Fall back to string-based compilation which knows how to handle it
+    if law.template == Template.SYMMETRY_COMMUTATION:
         return None
 
     return ASTClaimEvaluator(law)
