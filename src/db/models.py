@@ -345,6 +345,67 @@ class LawWitnessRecord:
 # =============================================================================
 
 
+# =============================================================================
+# PHASE-G: Reflection engine records
+# =============================================================================
+
+
+@dataclass
+class StandardModelRecord:
+    """A versioned standard model snapshot."""
+
+    run_id: str
+    version: int
+    fixed_laws_json: str
+    archived_laws_json: str
+    iteration_id: int | None = None
+    derived_observables_json: str | None = None
+    causal_narrative: str | None = None
+    hidden_variables_json: str | None = None
+    k_decomposition: str | None = None
+    confidence: float | None = None
+    id: int | None = None
+    created_at: datetime | None = None
+
+
+@dataclass
+class ReflectionSessionRecord:
+    """Audit trail for a single reflection invocation."""
+
+    run_id: str
+    iteration_index: int
+    trigger_reason: str  # 'periodic', 'token_limit'
+    auditor_result_json: str | None = None
+    theorist_result_json: str | None = None
+    severe_test_json: str | None = None
+    conflicts_found: int = 0
+    laws_archived: int = 0
+    hidden_variables_postulated: int = 0
+    standard_model_version: int | None = None
+    prompt_hash: str | None = None
+    runtime_ms: int | None = None
+    id: int | None = None
+    created_at: datetime | None = None
+
+
+@dataclass
+class SevereTestCommandRecord:
+    """A priority research direction from reflection."""
+
+    run_id: str
+    reflection_session_id: int
+    command_type: str  # 'initial_condition', 'topology_test', 'parity_challenge'
+    description: str
+    target_law_id: str | None = None
+    initial_conditions_json: str | None = None
+    grid_lengths_json: str | None = None
+    priority: str = "medium"  # 'high', 'medium', 'low'
+    consumed: bool = False
+    consumed_at: datetime | None = None
+    id: int | None = None
+    created_at: datetime | None = None
+
+
 @dataclass
 class LLMTranscriptRecord:
     """A record of an LLM interaction for debugging and audit.

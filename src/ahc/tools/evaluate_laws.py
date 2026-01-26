@@ -86,11 +86,26 @@ For FAIL verdicts, the counterexample includes:
 - states: up to 5 consecutive state strings centered on t_fail
 - states_t_offset: time offset of states[0] relative to t_fail
 - fail_position: the 0-based cell index where the violation occurred (local_transition)
-- actual_result: what the cell actually became (local_transition)"""
+- actual_result: what the cell actually became (local_transition)
+- neighborhood_at_t: the 3-cell neighborhood {left, center, right, pattern} at t_fail (local_transition)
+- neighborhood_at_t_minus_1: the 3-cell neighborhood one step before failure (local_transition)
+- observables_at_t: observable values at the failure time step (non-local templates)
+- observables_at_t1: observable values at t+1 (non-local templates)"""
 
     @property
     def parameters(self) -> list[ToolParameter]:
         return [
+            ToolParameter(
+                name="hypothesis_note",
+                type="string",
+                description="Your prediction and decision logic for this batch. "
+                    "State what you expect to learn, and what you'll do next based on each outcome. "
+                    "Example: 'Testing if A+K is conserved. If PASS: A and K are exchangeable components "
+                    "of a single quantity. If FAIL: check the counterexample to see which direction "
+                    "the imbalance goes — that tells us if K creation adds or consumes A.' "
+                    "This note is echoed back with results to help you stay on track.",
+                required=False,
+            ),
             ToolParameter(
                 name="laws",
                 type="array",
@@ -196,11 +211,12 @@ For FAIL verdicts, the counterexample includes:
             ),
         ]
 
-    def execute(self, laws: list[dict[str, Any]], **kwargs) -> ToolResult:
+    def execute(self, laws: list[dict[str, Any]], hypothesis_note: str | None = None, **kwargs) -> ToolResult:
         """Execute law evaluation.
 
         Args:
             laws: List of law dictionaries to evaluate
+            hypothesis_note: Optional prediction/decision note from the agent
 
         Returns:
             ToolResult with evaluation results for each law
@@ -244,12 +260,16 @@ For FAIL verdicts, the counterexample includes:
             "errors": sum(1 for r in results if r.get("status") == "ERROR"),
         }
 
-        return ToolResult.ok(
-            data={
-                "results": results,
-                "summary": summary,
-            }
-        )
+        data: dict[str, Any] = {
+            "results": results,
+            "summary": summary,
+        }
+
+        # Echo hypothesis note back so the agent can review its own predictions
+        if hypothesis_note:
+            data["your_hypothesis_note"] = hypothesis_note
+
+        return ToolResult.ok(data=data)
 
     def _scramble_law_id(self, law_id: str) -> str:
         """Scramble a law_id to prevent information leakage.
@@ -378,6 +398,12 @@ For FAIL verdicts, the counterexample includes:
                 cx_data["states"] = list(cx.trajectory_excerpt)
                 cx_data["states_t_offset"] = states_t_offset
 
+            # Include observable values at failure time for non-local templates
+            if cx.observables_at_t:
+                cx_data["observables_at_t"] = cx.observables_at_t
+            if cx.observables_at_t1:
+                cx_data["observables_at_t1"] = cx.observables_at_t1
+
             # Extract cell-level failure details from violation data
             if cx.observables_at_fail and isinstance(cx.observables_at_fail, dict):
                 pos = cx.observables_at_fail.get("position")
@@ -386,6 +412,33 @@ For FAIL verdicts, the counterexample includes:
                 actual = cx.observables_at_fail.get("actual_symbol")
                 if actual is not None:
                     cx_data["actual_result"] = actual
+
+                # Extract 3-cell neighborhood at failure for local_transition laws
+                if pos is not None and cx.trajectory_excerpt:
+                    # Find the state at t_fail within the excerpt
+                    excerpt_start = max(0, cx.t_fail - 2)
+                    t_fail_idx = cx.t_fail - excerpt_start
+                    if 0 <= t_fail_idx < len(cx.trajectory_excerpt):
+                        state_at_t = cx.trajectory_excerpt[t_fail_idx]
+                        grid_len = len(state_at_t)
+                        if grid_len > 0:
+                            left_idx = (pos - 1) % grid_len
+                            right_idx = (pos + 1) % grid_len
+                            cx_data["neighborhood_at_t"] = {
+                                "left": state_at_t[left_idx],
+                                "center": state_at_t[pos],
+                                "right": state_at_t[right_idx],
+                                "pattern": f"{state_at_t[left_idx]}{state_at_t[pos]}{state_at_t[right_idx]}",
+                            }
+                            # Also show the neighborhood at t-1 if available
+                            if t_fail_idx > 0:
+                                state_before = cx.trajectory_excerpt[t_fail_idx - 1]
+                                cx_data["neighborhood_at_t_minus_1"] = {
+                                    "left": state_before[left_idx],
+                                    "center": state_before[pos],
+                                    "right": state_before[right_idx],
+                                    "pattern": f"{state_before[left_idx]}{state_before[pos]}{state_before[right_idx]}",
+                                }
 
             result["counterexample"] = cx_data
 

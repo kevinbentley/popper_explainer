@@ -129,7 +129,7 @@ class ContextBuilder:
         sections.append("For `invariant`/`bound`/`monotone`/`implication_step`/`implication_state`: use observables + claim_ast")
         sections.append("For `symmetry_commutation`: use transform")
         sections.append("")
-        sections.append("**Reading counterexamples**: When a law FAILs, `states` shows ~5 consecutive states centered on t_fail. Use `states_t_offset` to find t_fail in the list (it's at index `-states_t_offset`). Use `fail_position` to index into each state string and trace the cell across time steps. The `actual_result` shows what the cell became.")
+        sections.append("**Reading counterexamples**: When a law FAILs, `states` shows ~5 consecutive states centered on t_fail. Use `states_t_offset` to find t_fail in the list (it's at index `-states_t_offset`). For local_transition: `fail_position` is the cell index, `actual_result` is what it became, `neighborhood_at_t` shows the 3-cell pattern {left, center, right} at the failure, and `neighborhood_at_t_minus_1` shows the pattern one step earlier — compare these to understand what caused the transition. For non-local templates: `observables_at_t` and `observables_at_t1` show the observable values at the failure time.")
         sections.append("")
 
         # Get validated theorems

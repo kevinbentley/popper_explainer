@@ -170,8 +170,14 @@ class LawProposer:
         else:
             snapshot = memory
 
-        # Inject previous research log into snapshot for continuity
-        if self._research_log and not snapshot.previous_research_log:
+        # Sync research log between proposer's in-memory cache and snapshot.
+        # Primary source: snapshot (loaded from DB by the handler).
+        # Fallback: proposer's in-memory cache (for same-run continuity).
+        if snapshot.previous_research_log and not self._research_log:
+            # DB had a log but proposer doesn't (e.g., after resume) — seed cache
+            self._research_log = snapshot.previous_research_log
+        elif self._research_log and not snapshot.previous_research_log:
+            # Proposer has a log but snapshot doesn't — inject into snapshot
             snapshot.previous_research_log = self._research_log
 
         # Build prompt

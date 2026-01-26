@@ -172,6 +172,7 @@ def create_default_registry(repo: AHCRepository | None = None) -> ToolRegistry:
     from src.ahc.tools.evaluate_laws import EvaluateLawsTool
     from src.ahc.tools.run_prediction import RunPredictionTool
     from src.ahc.tools.request_samples import RequestSamplesTool
+    from src.ahc.tools.simulate_trajectory import SimulateTrajectoryTool
     from src.ahc.tools.theorem_tools import (
         StoreTheoremTool,
         RetrieveTheoremsTool,
@@ -185,6 +186,7 @@ def create_default_registry(repo: AHCRepository | None = None) -> ToolRegistry:
     registry.register(EvaluateLawsTool(repo=repo))
     registry.register(RunPredictionTool())
     registry.register(RequestSamplesTool())
+    registry.register(SimulateTrajectoryTool())
 
     # Memory tools
     registry.register(StoreTheoremTool(repo=repo))

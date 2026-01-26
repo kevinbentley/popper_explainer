@@ -30,9 +30,16 @@ from src.orchestration.control_block import (
 from src.orchestration.phases import Phase, PhaseContext, PhaseHandler
 from src.proposer.memory import DiscoveryMemory, DiscoveryMemorySnapshot
 from src.proposer.proposer import LawProposer, ProposalRequest
+from src.reflection.engine import ReflectionEngine
+from src.reflection.persistence import (
+    build_standard_model_summary,
+    load_latest_standard_model,
+    save_reflection_result,
+)
 
 if TYPE_CHECKING:
     from src.db.repo import Repository
+    from src.proposer.client import GeminiClient, MockGeminiClient
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +91,7 @@ class DiscoveryPhaseHandler:
         novelty_tracker: NoveltyTracker | None = None,
         repo: Repository | None = None,
         config: DiscoveryPhaseConfig | None = None,
+        reflection_engine: ReflectionEngine | None = None,
     ):
         """Initialize discovery handler.
 
@@ -93,12 +101,15 @@ class DiscoveryPhaseHandler:
             novelty_tracker: Optional NoveltyTracker for saturation detection
             repo: Optional repository for persistence
             config: Phase configuration (num_workers, etc.)
+            reflection_engine: Optional reflection engine for periodic analysis
         """
         self.proposer = proposer
         self.harness = harness
         self.novelty_tracker = novelty_tracker
         self.repo = repo
         self.config = config or DiscoveryPhaseConfig()
+        self.reflection_engine = reflection_engine
+        self._discovery_iteration_count: int = 0
 
     @property
     def phase(self) -> Phase:
@@ -156,6 +167,15 @@ class DiscoveryPhaseHandler:
         # Persist novelty snapshot for ReadinessComputer to pick up
         if self.repo:
             self._persist_novelty_snapshot(result)
+
+        # Reflection engine: periodic auditor/theorist analysis
+        self._discovery_iteration_count += 1
+        if self._should_trigger_reflection(context):
+            reflection_addendum = self._run_reflection(context, result)
+            if reflection_addendum and result.research_log:
+                result.research_log = result.research_log + "\n" + reflection_addendum
+            elif reflection_addendum:
+                result.research_log = reflection_addendum
 
         # Build control block
         return self._build_control_block(result, context)
@@ -328,6 +348,19 @@ class DiscoveryPhaseHandler:
         falsified_laws: list[dict[str, Any]] = []
         counterexample_gallery: list[dict[str, Any]] = []
 
+        # Extract previous research_log from the most recent control block.
+        # This is the primary persistence mechanism — it survives crashes and
+        # resumes because control blocks are stored in the database.
+        previous_research_log: str | None = None
+        if context.previous_control_blocks:
+            # Control blocks are ordered most-recent-first
+            for cb in context.previous_control_blocks:
+                outputs = cb.phase_outputs or {}
+                log = outputs.get("research_log")
+                if log and isinstance(log, str):
+                    previous_research_log = log
+                    break
+
         if context.repo:
             # Track seen law_ids to avoid duplicates
             seen_accepted: set[str] = set()
@@ -391,11 +424,51 @@ class DiscoveryPhaseHandler:
                             "trajectory_excerpt": cex.trajectory_excerpt_json,
                         })
 
+        # Load standard model for filtering and summary
+        standard_model_summary = None
+        archived_law_ids: set[str] = set()
+        if context.repo:
+            sm = load_latest_standard_model(context.repo, context.run_id)
+            if sm:
+                standard_model_summary = build_standard_model_summary(sm)
+                archived_law_ids = set(sm.archived_laws)
+
+        # Filter out archived laws from accepted_laws
+        if archived_law_ids:
+            accepted_laws = [
+                law for law in accepted_laws
+                if law.get("law_id") not in archived_law_ids
+            ]
+
+        # Load unconsumed severe test commands as priority research directions
+        priority_research_directions = None
+        if context.repo:
+            commands = context.repo.list_unconsumed_severe_test_commands(
+                context.run_id, limit=10
+            )
+            if commands:
+                priority_research_directions = [
+                    {
+                        "command_type": cmd.command_type,
+                        "description": cmd.description,
+                        "target_law_id": cmd.target_law_id,
+                        "priority": cmd.priority,
+                    }
+                    for cmd in commands
+                ]
+                # Mark as consumed
+                for cmd in commands:
+                    if cmd.id is not None:
+                        context.repo.mark_severe_test_consumed(cmd.id)
+
         return DiscoveryMemorySnapshot(
             accepted_laws=accepted_laws,
             falsified_laws=falsified_laws,
             counterexamples=counterexample_gallery[:20],  # Limit size
             unknown_laws=[],
+            previous_research_log=previous_research_log,
+            standard_model_summary=standard_model_summary,
+            priority_research_directions=priority_research_directions,
         )
 
     def _build_request(self, context: PhaseContext) -> ProposalRequest:
@@ -563,6 +636,7 @@ class DiscoveryPhaseHandler:
                 "effective_novelty": effective_novelty,
                 "novelty_stats": result.novelty_stats,
                 "is_saturated": result.is_saturated,
+                "research_log": result.research_log,
             },
         )
 
@@ -623,6 +697,196 @@ class DiscoveryPhaseHandler:
                 base = max(base - 15, 30)
 
         return base
+
+    def _should_trigger_reflection(self, context: PhaseContext) -> bool:
+        """Determine if reflection should run this iteration.
+
+        Conditions:
+        - Reflection engine is available
+        - Reflection is enabled in config
+        - We've hit the interval (every N discovery iterations)
+        - No reflection session already exists for this iteration (resume safety)
+        """
+        if self.reflection_engine is None:
+            return False
+        if not context.config.enable_reflection:
+            return False
+        if self._discovery_iteration_count % context.config.reflection_interval != 0:
+            return False
+        if self._discovery_iteration_count == 0:
+            return False
+
+        # Resume safety: check if session already exists for this iteration
+        if context.repo:
+            existing = context.repo.get_reflection_session(
+                context.run_id, context.iteration_index
+            )
+            if existing is not None:
+                logger.info(
+                    f"Reflection session already exists for iteration {context.iteration_index}, skipping"
+                )
+                return False
+
+        return True
+
+    def _run_reflection(
+        self,
+        context: PhaseContext,
+        result: DiscoveryIterationResult,
+    ) -> str | None:
+        """Run the reflection engine and persist results.
+
+        Args:
+            context: Phase context
+            result: Current iteration result
+
+        Returns:
+            Research log addendum string, or None if reflection failed
+        """
+        if self.reflection_engine is None or not context.repo:
+            return None
+
+        logger.info(
+            f"Triggering reflection at discovery iteration {self._discovery_iteration_count}"
+        )
+
+        try:
+            # Gather inputs from database
+            fixed_laws = self._gather_fixed_laws(context)
+            graveyard = self._gather_graveyard(context)
+            anomalies = self._gather_anomalies(context)
+            research_log_entries = self._gather_research_log_entries(context)
+
+            # Load current standard model if exists
+            current_model = load_latest_standard_model(
+                context.repo, context.run_id
+            )
+
+            # Set logger context so LLM transcripts are tagged correctly
+            self.reflection_engine.set_logger_context(
+                run_id=context.run_id,
+                iteration_id=context.iteration_index,
+                phase="discovery",
+            )
+
+            # Run reflection
+            reflection_result = self.reflection_engine.run(
+                fixed_laws=fixed_laws,
+                graveyard=graveyard,
+                anomalies=anomalies,
+                research_log_entries=research_log_entries,
+                current_standard_model=current_model,
+            )
+
+            # Persist results
+            save_reflection_result(
+                repo=context.repo,
+                run_id=context.run_id,
+                iteration_index=context.iteration_index,
+                result=reflection_result,
+                trigger_reason="periodic",
+            )
+
+            logger.info(
+                f"Reflection complete: {len(reflection_result.auditor_result.conflicts)} conflicts, "
+                f"{len(reflection_result.auditor_result.archives)} archives, "
+                f"{len(reflection_result.severe_test_commands)} severe tests"
+            )
+
+            return reflection_result.research_log_addendum
+
+        except Exception as e:
+            logger.error(f"Reflection engine failed: {e}", exc_info=True)
+            return None
+
+    def _gather_fixed_laws(self, context: PhaseContext) -> list[dict[str, Any]]:
+        """Gather all PASS laws from the database for reflection input."""
+        if not context.repo:
+            return []
+
+        result = []
+        pass_evals = context.repo.list_evaluations(status="PASS", limit=500)
+        seen: set[str] = set()
+        for ev in pass_evals:
+            if ev.law_id in seen:
+                continue
+            seen.add(ev.law_id)
+            law_record = context.repo.get_law(ev.law_id)
+            if law_record:
+                law_dict = json.loads(law_record.law_json)
+                result.append({
+                    "law_id": ev.law_id,
+                    "template": law_record.template,
+                    "claim": law_dict.get("claim", ""),
+                    "observables": law_dict.get("observables", []),
+                    "forbidden": law_dict.get("forbidden", ""),
+                })
+        return result
+
+    def _gather_graveyard(self, context: PhaseContext) -> list[dict[str, Any]]:
+        """Gather all FAIL laws with counterexamples for reflection input."""
+        if not context.repo:
+            return []
+
+        result = []
+        fail_evals = context.repo.list_evaluations(status="FAIL", limit=500)
+        seen: set[str] = set()
+        for ev in fail_evals:
+            if ev.law_id in seen:
+                continue
+            seen.add(ev.law_id)
+            law_record = context.repo.get_law(ev.law_id)
+            if law_record:
+                law_dict = json.loads(law_record.law_json)
+                entry: dict[str, Any] = {
+                    "law_id": ev.law_id,
+                    "template": law_record.template,
+                    "claim": law_dict.get("claim", ""),
+                    "observables": law_dict.get("observables", []),
+                    "forbidden": law_dict.get("forbidden", ""),
+                }
+                cex = context.repo.get_counterexample_for_evaluation(ev.id)
+                if cex:
+                    entry["counterexample"] = {
+                        "initial_state": cex.initial_state,
+                        "t_fail": cex.t_fail,
+                        "trajectory_excerpt": cex.trajectory_excerpt_json,
+                    }
+                result.append(entry)
+        return result
+
+    def _gather_anomalies(self, context: PhaseContext) -> list[dict[str, Any]]:
+        """Gather all UNKNOWN laws for reflection input."""
+        if not context.repo:
+            return []
+
+        result = []
+        unknown_evals = context.repo.list_evaluations(status="UNKNOWN", limit=200)
+        seen: set[str] = set()
+        for ev in unknown_evals:
+            if ev.law_id in seen:
+                continue
+            seen.add(ev.law_id)
+            law_record = context.repo.get_law(ev.law_id)
+            if law_record:
+                law_dict = json.loads(law_record.law_json)
+                result.append({
+                    "law_id": ev.law_id,
+                    "template": law_record.template,
+                    "claim": law_dict.get("claim", ""),
+                    "reason_code": ev.reason_code or "",
+                })
+        return result
+
+    def _gather_research_log_entries(self, context: PhaseContext) -> list[str]:
+        """Gather research log entries from all prior control blocks."""
+        entries = []
+        for cb in context.previous_control_blocks:
+            outputs = cb.phase_outputs or {}
+            log = outputs.get("research_log")
+            if log and isinstance(log, str):
+                entries.append(log)
+        return entries
 
     def _persist_novelty_snapshot(self, result: DiscoveryIterationResult) -> None:
         """Persist novelty snapshot for ReadinessComputer to use.

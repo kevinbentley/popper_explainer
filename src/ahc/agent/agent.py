@@ -633,6 +633,7 @@ class AgentLoop:
             "template", "law_id", "claim", "forbidden", "result_op",
             "direction", "transform", "family", "name", "description",
             "status", "reason_code", "notes", "error",
+            "hypothesis_note", "your_hypothesis_note",
         }
 
         # Fields containing observable expressions with quoted symbols
@@ -688,6 +689,7 @@ class AgentLoop:
         PROTECTED_FIELDS = {
             "template", "law_id", "claim", "forbidden", "result_op",
             "direction", "transform", "family", "name", "description",
+            "hypothesis_note", "your_hypothesis_note",
         }
 
         if isinstance(data, str):
@@ -990,6 +992,8 @@ Use the evaluate_laws tool to propose formal laws. Study counterexamples from fa
 ## AVAILABLE TOOLS
 
 - **evaluate_laws**: REQUIRES 5-15 laws per call. Test your proposed laws against the simulator.
+  Supports an optional `hypothesis_note` string — use it to record your predictions
+  and decision tree BEFORE seeing results. It gets echoed back with the results.
 - **store_theorem**: Record confirmed patterns
 - **retrieve_theorems**: Recall your discoveries
 - **query_log**: Review past experiments
@@ -1004,9 +1008,16 @@ Then test with neighbor context (left_neighbor, right_neighbor).
 Goal: Map out the local transition function.
 
 **Phase 2 — Global Counts & Conservation** (invariant, bound templates)
-Count how many of each symbol exist. Does count('A') stay constant?
-Does count('A') + count('B') stay constant? Are there upper/lower bounds?
-Goal: Find conserved quantities and bounds.
+Systematically probe for conserved quantities using this strategy:
+  Step 1: Test individual counts — count('A'), count('B'), count('K'), count('W')
+  Step 2: Test PAIRWISE SUMS — count('A')+count('K'), count('B')+count('K'),
+          count('A')+count('B'), count('A')+count('W'), etc.
+  Step 3: Test WEIGHTED sums — count('A')+count('B')+2*count('K'),
+          count('A')-count('B'), etc.
+  Step 4: Test bounds on quantities that aren't conserved.
+K is likely involved in conserved quantities because it appears/disappears —
+the "missing" count may be hiding in a composite sum with another symbol.
+Goal: Find conserved quantities, especially composites involving K.
 
 **Phase 3 — Relationships & Implications** (implication_step, implication_state)
 Test conditional relationships: When X is true, does Y follow?
@@ -1036,11 +1047,34 @@ You have instruments that measure numerical properties of states:
 - adjacent_pairs(s1, s2) — count of s1 immediately followed by s2
 - count_pattern(pat) — count of 3-cell neighborhoods matching pattern
   Examples: count_pattern('AWB'), count_pattern('WKW'), count_pattern('AWA')
-- transition_indicator — count related to future state transitions
+- transition_indicator — counts cells where a SPECIFIC TYPE of event will
+  occur at the next timestep. It does NOT measure general "activity" or
+  "movement". TI=0 means that one particular phenomenon is absent, NOT that
+  the grid is static. Particles may still be moving freely when TI=0.
 
-**Derived expressions** (combine with +, -, *):
-- "count('A') + count('B')" — total of A and B
-- "count('A') * count('K')" — product of counts
+**Composite observables** (combine primitives with +, -, *, % operators):
+Observable expressions support FULL ARITHMETIC. You can build composite
+quantities from any primitives above. This is CRITICAL for finding conservation
+laws — individual counts may not be conserved, but combinations might be.
+
+Examples:
+- "count('A') + count('B')" — total of two symbol types
+- "count('A') + count('K')" — a symbol plus its collision state
+- "2 * count('K') + count('A')" — weighted combination
+- "count('A') + count('B') + 2 * count('K')" — complex composite
+- "grid_length - count('W')" — total non-empty cells
+- "count('A') - count('B')" — difference (could be a signed conserved quantity)
+- "(count('A') + count('K')) * 2" — parenthesized sub-expressions
+
+To test if a composite quantity is conserved, define it as a NAMED observable:
+  "observables": [{"name": "R", "expr": "count('A') + count('K')"}]
+Then reference it in claim_ast:
+  "claim_ast": {"op": "==", "lhs": {"obs": "R", "t": {"var": "t"}}, "rhs": {"obs": "R", "t": {"const": 0}}}
+
+STRATEGY: If count('A') alone is NOT conserved and count('K') alone is NOT
+conserved, try count('A') + count('K'). The universe may have "hidden"
+conserved quantities that only emerge as sums or differences of counts.
+Systematically try different linear combinations.
 
 ## LAW TEMPLATES
 
@@ -1185,8 +1219,21 @@ LAB NOTE: [What I'm testing next] [Why — based on previous findings] [What I'l
 
 Then make your tool call.
 
-These notes are your research memory. Without them, you will forget your
-findings and repeat mistakes. Keep them concise but informative.
+### HYPOTHESIS NOTE (in tool call)
+
+In your evaluate_laws call, use `hypothesis_note` to record your predictions
+and decision tree. This note is echoed back with results so you can compare
+your predictions against reality. Example:
+
+```json
+{
+  "hypothesis_note": "Testing A+K conservation. If PASS: A and K are components of a single conserved quantity — next test B+K. If FAIL: check counterexample to see if A+K increases or decreases, which reveals the exchange direction.",
+  "laws": [...]
+}
+```
+
+This forces you to THINK BEFORE you see results. If your prediction was wrong,
+that mismatch is itself a discovery — investigate why.
 
 If you are unsure what to test next, test the simplest untested hypothesis.
 If you are confused by a result, re-test with different parameters."""

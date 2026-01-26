@@ -34,13 +34,16 @@ from src.db.models import (
     LLMTranscriptRecord,
     NoveltySnapshotRecord,
     ObservableProposalRecord,
+    ReflectionSessionRecord,
+    SevereTestCommandRecord,
+    StandardModelRecord,
     TheoremGenerationArtifactRecord,
     TheoremRecord,
     TheoremRunRecord,
     TheoryRecord,
 )
 
-SCHEMA_VERSION = 6  # PHASE-F: Orchestration engine, predictions, held-out sets
+SCHEMA_VERSION = 7  # PHASE-G: Reflection engine — standard models, reflection sessions, severe test commands
 
 
 class Repository:
@@ -3275,3 +3278,254 @@ class Repository:
             (run_id, limit),
         )
         return [self._row_to_readiness_snapshot(row) for row in cursor.fetchall()]
+
+    # =========================================================================
+    # PHASE-G: Reflection engine — standard models, sessions, severe tests
+    # =========================================================================
+
+    # --- Standard Model operations ---
+
+    def insert_standard_model(self, record: StandardModelRecord) -> int:
+        """Insert a new standard model version. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO standard_models (
+                run_id, iteration_id, version, fixed_laws_json, archived_laws_json,
+                derived_observables_json, causal_narrative, hidden_variables_json,
+                k_decomposition, confidence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.run_id,
+                record.iteration_id,
+                record.version,
+                record.fixed_laws_json,
+                record.archived_laws_json,
+                record.derived_observables_json,
+                record.causal_narrative,
+                record.hidden_variables_json,
+                record.k_decomposition,
+                record.confidence,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_latest_standard_model(self, run_id: str) -> StandardModelRecord | None:
+        """Get the latest standard model for a run."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM standard_models
+            WHERE run_id = ?
+            ORDER BY version DESC
+            LIMIT 1
+            """,
+            (run_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_standard_model(row)
+
+    def get_standard_model_by_version(
+        self, run_id: str, version: int
+    ) -> StandardModelRecord | None:
+        """Get a specific standard model version."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM standard_models
+            WHERE run_id = ? AND version = ?
+            """,
+            (run_id, version),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_standard_model(row)
+
+    def get_next_standard_model_version(self, run_id: str) -> int:
+        """Get the next version number for a standard model."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT MAX(version) as max_v FROM standard_models WHERE run_id = ?",
+            (run_id,),
+        )
+        row = cursor.fetchone()
+        if row is None or row["max_v"] is None:
+            return 1
+        return row["max_v"] + 1
+
+    def _row_to_standard_model(self, row: sqlite3.Row) -> StandardModelRecord:
+        return StandardModelRecord(
+            id=row["id"],
+            run_id=row["run_id"],
+            iteration_id=row["iteration_id"],
+            version=row["version"],
+            fixed_laws_json=row["fixed_laws_json"],
+            archived_laws_json=row["archived_laws_json"],
+            derived_observables_json=row["derived_observables_json"],
+            causal_narrative=row["causal_narrative"],
+            hidden_variables_json=row["hidden_variables_json"],
+            k_decomposition=row["k_decomposition"],
+            confidence=row["confidence"],
+            created_at=row["created_at"],
+        )
+
+    # --- Reflection Session operations ---
+
+    def insert_reflection_session(self, record: ReflectionSessionRecord) -> int:
+        """Insert a new reflection session. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO reflection_sessions (
+                run_id, iteration_index, trigger_reason,
+                auditor_result_json, theorist_result_json, severe_test_json,
+                conflicts_found, laws_archived, hidden_variables_postulated,
+                standard_model_version, prompt_hash, runtime_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.run_id,
+                record.iteration_index,
+                record.trigger_reason,
+                record.auditor_result_json,
+                record.theorist_result_json,
+                record.severe_test_json,
+                record.conflicts_found,
+                record.laws_archived,
+                record.hidden_variables_postulated,
+                record.standard_model_version,
+                record.prompt_hash,
+                record.runtime_ms,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def get_reflection_session(
+        self, run_id: str, iteration_index: int
+    ) -> ReflectionSessionRecord | None:
+        """Get a reflection session by run and iteration."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM reflection_sessions
+            WHERE run_id = ? AND iteration_index = ?
+            """,
+            (run_id, iteration_index),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_reflection_session(row)
+
+    def list_reflection_sessions(
+        self, run_id: str, limit: int = 100
+    ) -> list[ReflectionSessionRecord]:
+        """List reflection sessions for a run."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM reflection_sessions
+            WHERE run_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (run_id, limit),
+        )
+        return [self._row_to_reflection_session(row) for row in cursor.fetchall()]
+
+    def _row_to_reflection_session(self, row: sqlite3.Row) -> ReflectionSessionRecord:
+        return ReflectionSessionRecord(
+            id=row["id"],
+            run_id=row["run_id"],
+            iteration_index=row["iteration_index"],
+            trigger_reason=row["trigger_reason"],
+            auditor_result_json=row["auditor_result_json"],
+            theorist_result_json=row["theorist_result_json"],
+            severe_test_json=row["severe_test_json"],
+            conflicts_found=row["conflicts_found"],
+            laws_archived=row["laws_archived"],
+            hidden_variables_postulated=row["hidden_variables_postulated"],
+            standard_model_version=row["standard_model_version"],
+            prompt_hash=row["prompt_hash"],
+            runtime_ms=row["runtime_ms"],
+            created_at=row["created_at"],
+        )
+
+    # --- Severe Test Command operations ---
+
+    def insert_severe_test_command(self, record: SevereTestCommandRecord) -> int:
+        """Insert a new severe test command. Returns the new ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO severe_test_commands (
+                run_id, reflection_session_id, command_type, target_law_id,
+                description, initial_conditions_json, grid_lengths_json, priority
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.run_id,
+                record.reflection_session_id,
+                record.command_type,
+                record.target_law_id,
+                record.description,
+                record.initial_conditions_json,
+                record.grid_lengths_json,
+                record.priority,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore
+
+    def list_unconsumed_severe_test_commands(
+        self, run_id: str, limit: int = 20
+    ) -> list[SevereTestCommandRecord]:
+        """List unconsumed severe test commands, ordered by priority."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM severe_test_commands
+            WHERE run_id = ? AND consumed = 0
+            ORDER BY
+                CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+                created_at ASC
+            LIMIT ?
+            """,
+            (run_id, limit),
+        )
+        return [self._row_to_severe_test_command(row) for row in cursor.fetchall()]
+
+    def mark_severe_test_consumed(self, command_id: int) -> None:
+        """Mark a severe test command as consumed."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE severe_test_commands
+            SET consumed = 1, consumed_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (command_id,),
+        )
+        self.conn.commit()
+
+    def _row_to_severe_test_command(self, row: sqlite3.Row) -> SevereTestCommandRecord:
+        return SevereTestCommandRecord(
+            id=row["id"],
+            run_id=row["run_id"],
+            reflection_session_id=row["reflection_session_id"],
+            command_type=row["command_type"],
+            target_law_id=row["target_law_id"],
+            description=row["description"],
+            initial_conditions_json=row["initial_conditions_json"],
+            grid_lengths_json=row["grid_lengths_json"],
+            priority=row["priority"],
+            consumed=bool(row["consumed"]),
+            consumed_at=row["consumed_at"],
+            created_at=row["created_at"],
+        )

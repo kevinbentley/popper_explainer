@@ -26,6 +26,9 @@ class DiscoveryMemorySnapshot:
     counterexamples: list[dict[str, Any]] = field(default_factory=list)
     capabilities: dict[str, Any] = field(default_factory=dict)
     previous_research_log: str | None = None
+    # Reflection engine outputs
+    standard_model_summary: dict[str, Any] | None = None
+    priority_research_directions: list[dict[str, Any]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -36,6 +39,8 @@ class DiscoveryMemorySnapshot:
             "counterexamples": self.counterexamples,
             "capabilities": self.capabilities,
             "previous_research_log": self.previous_research_log,
+            "standard_model_summary": self.standard_model_summary,
+            "priority_research_directions": self.priority_research_directions,
         }
 
     @classmethod
@@ -48,6 +53,8 @@ class DiscoveryMemorySnapshot:
             counterexamples=data.get("counterexamples", []),
             capabilities=data.get("capabilities", {}),
             previous_research_log=data.get("previous_research_log"),
+            standard_model_summary=data.get("standard_model_summary"),
+            priority_research_directions=data.get("priority_research_directions"),
         )
 
 

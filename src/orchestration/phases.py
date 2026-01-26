@@ -132,6 +132,11 @@ class OrchestratorConfig:
     laws_per_iteration: int = 10
     tests_per_law: int = 200
 
+    # Reflection engine configuration
+    enable_reflection: bool = True
+    reflection_interval: int = 3  # Run reflection every N discovery iterations
+    reflection_max_input_tokens: int = 100_000
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
@@ -148,6 +153,9 @@ class OrchestratorConfig:
             "plateau_improvement_threshold": self.plateau_improvement_threshold,
             "laws_per_iteration": self.laws_per_iteration,
             "tests_per_law": self.tests_per_law,
+            "enable_reflection": self.enable_reflection,
+            "reflection_interval": self.reflection_interval,
+            "reflection_max_input_tokens": self.reflection_max_input_tokens,
         }
 
     @classmethod
@@ -178,6 +186,9 @@ class OrchestratorConfig:
             plateau_improvement_threshold=data.get("plateau_improvement_threshold", 0.01),
             laws_per_iteration=data.get("laws_per_iteration", 10),
             tests_per_law=data.get("tests_per_law", 200),
+            enable_reflection=data.get("enable_reflection", True),
+            reflection_interval=data.get("reflection_interval", 3),
+            reflection_max_input_tokens=data.get("reflection_max_input_tokens", 100_000),
         )
 
 

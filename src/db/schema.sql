@@ -1,5 +1,5 @@
 -- Popper Explainer Database Schema
--- Version: 6 (PHASE-F: Orchestration engine, predictions, held-out sets)
+-- Version: 7 (PHASE-G: Reflection engine — standard models, reflection sessions, severe test commands)
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -633,3 +633,76 @@ CREATE INDEX IF NOT EXISTS idx_llm_transcripts_run ON llm_transcripts(run_id);
 CREATE INDEX IF NOT EXISTS idx_llm_transcripts_component ON llm_transcripts(component);
 CREATE INDEX IF NOT EXISTS idx_llm_transcripts_phase ON llm_transcripts(phase);
 CREATE INDEX IF NOT EXISTS idx_llm_transcripts_created ON llm_transcripts(created_at);
+
+-- =============================================================================
+-- PHASE-G: Reflection engine — standard models, reflection sessions, severe tests
+-- =============================================================================
+
+-- Standard models: the agent's evolving "best theory"
+CREATE TABLE IF NOT EXISTS standard_models (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    iteration_id INTEGER,
+    version INTEGER NOT NULL,
+    fixed_laws_json TEXT NOT NULL,
+    archived_laws_json TEXT NOT NULL,
+    derived_observables_json TEXT,
+    causal_narrative TEXT,
+    hidden_variables_json TEXT,
+    k_decomposition TEXT,
+    confidence REAL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (run_id) REFERENCES orchestration_runs(run_id),
+    UNIQUE (run_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_standard_models_run ON standard_models(run_id);
+CREATE INDEX IF NOT EXISTS idx_standard_models_version ON standard_models(run_id, version);
+
+-- Reflection sessions: audit trail for each reflection invocation
+CREATE TABLE IF NOT EXISTS reflection_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    iteration_index INTEGER NOT NULL,
+    trigger_reason TEXT NOT NULL,
+    auditor_result_json TEXT,
+    theorist_result_json TEXT,
+    severe_test_json TEXT,
+    conflicts_found INTEGER DEFAULT 0,
+    laws_archived INTEGER DEFAULT 0,
+    hidden_variables_postulated INTEGER DEFAULT 0,
+    standard_model_version INTEGER,
+    prompt_hash TEXT,
+    runtime_ms INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (run_id) REFERENCES orchestration_runs(run_id),
+    CONSTRAINT valid_trigger CHECK (trigger_reason IN ('periodic', 'token_limit'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_reflection_sessions_run ON reflection_sessions(run_id);
+CREATE INDEX IF NOT EXISTS idx_reflection_sessions_iter ON reflection_sessions(run_id, iteration_index);
+
+-- Severe test commands: priority research directions for next discovery cycle
+CREATE TABLE IF NOT EXISTS severe_test_commands (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    reflection_session_id INTEGER NOT NULL,
+    command_type TEXT NOT NULL,
+    target_law_id TEXT,
+    description TEXT NOT NULL,
+    initial_conditions_json TEXT,
+    grid_lengths_json TEXT,
+    priority TEXT NOT NULL DEFAULT 'medium',
+    consumed INTEGER DEFAULT 0,
+    consumed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (run_id) REFERENCES orchestration_runs(run_id),
+    FOREIGN KEY (reflection_session_id) REFERENCES reflection_sessions(id),
+    CONSTRAINT valid_command_type CHECK (command_type IN ('initial_condition', 'topology_test', 'parity_challenge')),
+    CONSTRAINT valid_priority CHECK (priority IN ('high', 'medium', 'low'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_severe_test_run ON severe_test_commands(run_id);
+CREATE INDEX IF NOT EXISTS idx_severe_test_session ON severe_test_commands(reflection_session_id);
+CREATE INDEX IF NOT EXISTS idx_severe_test_consumed ON severe_test_commands(run_id, consumed);
+CREATE INDEX IF NOT EXISTS idx_severe_test_priority ON severe_test_commands(run_id, priority);

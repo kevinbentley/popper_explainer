@@ -440,6 +440,12 @@ class PromptBuilder:
         # Expression language reminder
         sections.append(self._build_expression_language_section())
 
+        # Priority research directions from reflection engine
+        if memory.priority_research_directions:
+            sections.append(self._build_research_directions_section(
+                memory.priority_research_directions
+            ))
+
         # Request section - includes phase-specific guidance
         sections.append(self._build_request_section(
             request_count, target_templates, exclude_templates, adaptation_reason
@@ -955,6 +961,35 @@ WHAT TO EXPLORE:
             "Focus your candidate_laws on THE FRONTIER, not on re-proving THE STANDARD MODEL.",
         ])
 
+        return "\n".join(lines)
+
+    def _build_research_directions_section(
+        self,
+        directions: list[dict[str, Any]],
+    ) -> str:
+        """Build section for priority research directions from reflection engine.
+
+        These directions guide the LLM toward specific experimental conditions
+        identified by the periodic auditor/theorist analysis.
+        """
+        lines = [
+            "=== PRIORITY RESEARCH DIRECTIONS ===",
+            "The following research directions were identified by systematic analysis",
+            "of your accepted laws, falsification graveyard, and anomalies.",
+            "Prioritize proposals that address these directions.",
+            "",
+        ]
+        for i, d in enumerate(directions, 1):
+            priority = d.get("priority", "medium")
+            description = d.get("description", "")
+            cmd_type = d.get("command_type", "")
+            target = d.get("target_law_id")
+            lines.append(f"{i}. [{priority.upper()}] {description}")
+            if target:
+                lines.append(f"   Target law: {target}")
+            if cmd_type:
+                lines.append(f"   Type: {cmd_type}")
+            lines.append("")
         return "\n".join(lines)
 
     def estimate_tokens(self, prompt: str) -> int:

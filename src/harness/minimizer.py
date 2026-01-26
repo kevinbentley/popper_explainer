@@ -73,8 +73,14 @@ class Minimizer:
             current_state = reduced
             attempts += 1
 
-        # Strategy 3: Try to shrink grid (harder, skip for now)
-        # This would require more sophisticated state transformation
+        # Strategy 3: Try to shrink grid by removing empty cells
+        remaining_budget = self.budget - attempts
+        shrunk = self._try_shrink_grid(
+            current_state, current_config, current_t_fail, law,
+            budget=remaining_budget,
+        )
+        if shrunk is not None:
+            current_state, current_config = shrunk
 
         # Regenerate trajectory excerpt from minimized state
         # Run enough steps to capture states around the failure (t_fail-2 to t_fail+2)
@@ -182,4 +188,99 @@ class Minimizer:
                 # Restore collision
                 cells[i] = Symbol.COLLISION.value
 
+        return None
+
+    def _try_shrink_grid(
+        self,
+        state: str,
+        config: Config,
+        t_fail: int,
+        law: CandidateLaw,
+        budget: int = 50,
+    ) -> tuple[str, Config] | None:
+        """Try to shrink the grid by removing empty cells.
+
+        Iteratively removes one empty cell at a time, preferring cells
+        furthest from any particles. Stops when no more removals preserve
+        the failure or the grid reaches minimum size.
+
+        Args:
+            state: Current initial state string
+            config: Current config
+            t_fail: Time step of failure
+            law: The law being minimized
+            budget: Maximum shrink attempts
+
+        Returns:
+            Tuple of (new_state, new_config) if shrunk, None otherwise
+        """
+        MIN_GRID = 3  # Minimum grid for 3-cell neighborhoods
+        current_state = state
+        current_config = config
+        shrunk = False
+        attempts = 0
+
+        while len(current_state) > MIN_GRID and attempts < budget:
+            # Find empty cells to try removing
+            empty_indices = [
+                i for i, c in enumerate(current_state)
+                if c == Symbol.EMPTY.value
+            ]
+
+            if not empty_indices:
+                break
+
+            # Score each empty cell by distance from nearest particle
+            # Prefer removing cells far from the action
+            particle_indices = [
+                i for i, c in enumerate(current_state)
+                if c != Symbol.EMPTY.value
+            ]
+
+            if not particle_indices:
+                break  # All empty — nothing to shrink meaningfully
+
+            grid_len = len(current_state)
+
+            def min_circular_distance(idx: int) -> int:
+                """Minimum circular distance from idx to any particle."""
+                return min(
+                    min(abs(idx - p), grid_len - abs(idx - p))
+                    for p in particle_indices
+                )
+
+            # Sort empties by distance from particles (furthest first)
+            empty_indices.sort(key=min_circular_distance, reverse=True)
+
+            removed = False
+            for idx in empty_indices:
+                # Try removing this cell
+                test_state = current_state[:idx] + current_state[idx + 1:]
+                test_config = Config(grid_length=len(test_state))
+
+                case = Case(
+                    initial_state=test_state,
+                    config=test_config,
+                    seed=0,
+                    generator_family="minimizer",
+                    params_hash="min_shrink",
+                )
+                result = self._evaluator.evaluate_case(case, t_fail)
+                attempts += 1
+
+                if not result.passed and result.precondition_met:
+                    current_state = test_state
+                    current_config = test_config
+                    shrunk = True
+                    removed = True
+                    break
+
+                if attempts >= budget:
+                    break
+
+            if not removed:
+                break  # No removable empty cell preserves the failure
+
+        if shrunk:
+            return current_state, current_config
         return None
