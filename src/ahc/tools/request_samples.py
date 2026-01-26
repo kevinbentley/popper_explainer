@@ -35,10 +35,8 @@ Use this to get examples of specific patterns or configurations:
 
 Available patterns:
 - "random": Random states with specified density
-- "collision": States that will have collisions
-- "approaching": States with particles approaching each other
-- "empty": Mostly empty states
-- "dense": High-density states
+- "sparse": States with mostly _ symbols
+- "dense": High-density states (mostly non-_ symbols)
 - "pathological": Edge cases and unusual configurations
 - "symmetric": States with mirror symmetry
 
@@ -52,7 +50,7 @@ Returns states and optionally their trajectories."""
                 type="string",
                 description="Type of samples to request",
                 required=True,
-                enum=["random", "collision", "approaching", "empty", "dense", "pathological", "symmetric"],
+                enum=["random", "mixed_ABK", "converging_AB", "sparse", "dense", "pathological", "symmetric"],
             ),
             ToolParameter(
                 name="count",
@@ -149,11 +147,11 @@ Returns states and optionally their trajectories."""
 
         if pattern == "random":
             samples = self._generate_random(count, length, seed)
-        elif pattern == "collision":
+        elif pattern == "mixed_ABK":
             samples = self._generate_collision(count, length, seed)
-        elif pattern == "approaching":
+        elif pattern == "converging_AB":
             samples = self._generate_approaching(count, length, seed)
-        elif pattern == "empty":
+        elif pattern == "sparse":
             samples = self._generate_empty(count, length, seed)
         elif pattern == "dense":
             samples = self._generate_dense(count, length, seed)

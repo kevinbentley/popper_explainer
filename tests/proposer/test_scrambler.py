@@ -16,10 +16,10 @@ class TestSymbolMapping:
 
     def test_valid_mapping(self):
         """Valid single-character mappings work."""
-        mapping = SymbolMapping(".", "_", "Background")
+        mapping = SymbolMapping(".", "W", "Symbol W")
         assert mapping.physical == "."
-        assert mapping.abstract == "_"
-        assert mapping.description == "Background"
+        assert mapping.abstract == "W"
+        assert mapping.description == "Symbol W"
 
     def test_invalid_physical_length(self):
         """Rejects multi-character physical symbols."""
@@ -42,18 +42,18 @@ class TestSymbolScrambler:
     def test_default_mappings(self, scrambler):
         """Default scrambler has correct mappings."""
         assert len(scrambler.mappings) == 4
-        assert scrambler.abstract_symbols == ["_", "A", "B", "K"]
+        assert scrambler.abstract_symbols == ["W", "A", "B", "K"]
         assert scrambler.physical_symbols == [".", ">", "<", "X"]
 
     def test_to_abstract_state(self, scrambler):
         """Converts physical state to abstract."""
         physical = "..><.X.."
         abstract = scrambler.to_abstract(physical)
-        assert abstract == "__AB_K__"
+        assert abstract == "WWABWKWW"
 
     def test_to_physical_state(self, scrambler):
         """Converts abstract state to physical."""
-        abstract = "__AB_K__"
+        abstract = "WWABWKWW"
         physical = scrambler.to_physical(abstract)
         assert physical == "..><.X.."
 
@@ -77,7 +77,7 @@ class TestSymbolScrambler:
 
     def test_translate_pattern_to_physical(self, scrambler):
         """Translates neighbor patterns to physical."""
-        abstract = "AB_"
+        abstract = "ABW"
         physical = scrambler.translate_pattern(abstract, to_physical=True)
         assert physical == "><."
 
@@ -85,15 +85,15 @@ class TestSymbolScrambler:
         """Translates neighbor patterns to abstract."""
         physical = "><."
         abstract = scrambler.translate_pattern(physical, to_physical=False)
-        assert abstract == "AB_"
+        assert abstract == "ABW"
 
     def test_get_symbol_glossary(self, scrambler):
         """Glossary contains all symbols with descriptions."""
         glossary = scrambler.get_symbol_glossary()
-        assert "_ - Background" in glossary
-        assert "A - Chiral-1" in glossary
-        assert "B - Chiral-2" in glossary
-        assert "K - Kinetic" in glossary
+        assert "W - Symbol W" in glossary
+        assert "A - Symbol A" in glossary
+        assert "B - Symbol B" in glossary
+        assert "K - Symbol K" in glossary
 
 
 class TestTranslateLawToPhysical:
@@ -117,7 +117,7 @@ class TestTranslateLawToPhysical:
 
     def test_translate_neighbor_pattern(self, scrambler):
         """Translates neighbor_pattern from abstract to physical."""
-        law_data = {"neighbor_pattern": "AB_"}
+        law_data = {"neighbor_pattern": "ABW"}
         result = scrambler.translate_law_to_physical(law_data)
         assert result["neighbor_pattern"] == "><."
 
@@ -172,10 +172,10 @@ class TestTranslateResultToAbstract:
             }
         }
         result = scrambler.translate_result_to_abstract(result_data)
-        assert result["counterexample"]["initial_state"] == "__AB__"
-        assert result["counterexample"]["trajectory_excerpt"][0] == "__AB__"
-        assert result["counterexample"]["trajectory_excerpt"][1] == "__K___"
-        assert result["counterexample"]["trajectory_excerpt"][2] == "_A_B__"
+        assert result["counterexample"]["initial_state"] == "WWABWW"
+        assert result["counterexample"]["trajectory_excerpt"][0] == "WWABWW"
+        assert result["counterexample"]["trajectory_excerpt"][1] == "WWKWWW"
+        assert result["counterexample"]["trajectory_excerpt"][2] == "WAWBWW"
 
 
 class TestModuleFunctions:
@@ -188,8 +188,8 @@ class TestModuleFunctions:
 
     def test_to_abstract(self):
         """Module-level to_abstract works."""
-        assert to_abstract("..><..") == "__AB__"
+        assert to_abstract("..><..") == "WWABWW"
 
     def test_to_physical(self):
         """Module-level to_physical works."""
-        assert to_physical("__AB__") == "..><.."
+        assert to_physical("WWABWW") == "..><.."

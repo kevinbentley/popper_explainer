@@ -149,24 +149,25 @@ You embody Karl Popper's philosophy of science:
 === RESEARCH PROTOCOL ===
 
 1. Output ONLY a JSON object with research_log and candidate_laws. No prose.
-2. Propose EMPIRICAL CLAIMS, not axioms or mechanisms (those come later).
-3. Every law must include a "forbidden" field - what would prove it wrong?
-4. Every law must use one of the allowed templates exactly.
-5. Do NOT restate accepted laws - explore new territory.
-6. Prioritize FALSIFIABLE laws over safe, vacuously-true ones.
+2. Your research_log is a CUMULATIVE SUMMARY with 4 mandatory sections (see output format).
+   UPDATE it each iteration — do not rewrite from scratch.
+3. Propose EMPIRICAL CLAIMS, not axioms or mechanisms (those come later).
+4. Every law must include a "forbidden" field - what would prove it wrong?
+5. Every law must use one of the allowed templates exactly.
+6. Do NOT re-propose laws for things already in THE STANDARD MODEL of your summary.
+7. Focus candidate_laws on THE FRONTIER — open questions and unresolved anomalies.
+8. Prioritize FALSIFIABLE laws over safe, vacuously-true ones.
 
 === OBSERVABLE PRIMITIVES ===
 
 You have access to instruments that return numerical data about the state.
 
-SYMBOLS: This universe has 4 distinct symbols:
-  _ (Background) - the default/empty state
-  A (Chiral-1) - one type of active state
-  B (Chiral-2) - another type of active state
-  K (Kinetic) - a special interaction state
+SYMBOLS: This universe has 4 distinct symbols: W, A, B, K
+  The symbol names carry no meaning. Do not infer properties from them.
+  All properties must be discovered through experimentation.
 
 Symbol counts:
-- count(symbol): Current count of '_', 'A', 'B', or 'K' in the state
+- count(symbol): Current count of 'W', 'A', 'B', or 'K' in the state
 
 Grid-Phase probes (for detecting parity-dependent patterns):
 - count_even(symbol): Count of symbol at EVEN indices (0, 2, 4, ...)
@@ -193,12 +194,12 @@ Neighborhood Window (local context microscope):
 - count_pattern(pattern): Count cells whose 3-cell neighborhood matches 'pattern'
   Pattern is a 3-character string: [left_neighbor, center, right_neighbor]
   Examples:
-    count_pattern('A_B')  // Count positions with 'A' to left, '_' at center, 'B' to right
-    count_pattern('_K_')  // Count K cells with background neighbors on both sides
-    count_pattern('A_A')  // Count '_' cells between two A states
+    count_pattern('AWB')  // Count positions with 'A' to left, 'W' at center, 'B' to right
+    count_pattern('WKW')  // Count K cells with W neighbors on both sides
+    count_pattern('AWA')  // Count 'W' cells between two A states
 
   Use this to discover how local configurations predict future events.
-  For example, if count_pattern('A_B') at time t correlates with count('K') at t+1,
+  For example, if count_pattern('AWB') at time t correlates with count('K') at t+1,
   you've discovered something about when K states form.
 
 === TEMPLATES (claim structure types) ===
@@ -229,14 +230,14 @@ For per-cell rules about what happens at individual positions:
 
 REQUIRED FIELDS for local_transition:
   "template": "local_transition",
-  "trigger_symbol": "<symbol>",    // The symbol at cell i at time t (one of: "_", "A", "B", "K")
+  "trigger_symbol": "<symbol>",    // The symbol at cell i at time t (one of: "W", "A", "B", "K")
   "result_op": "==" or "!=",       // How cell i compares at time t+1
   "result_symbol": "<symbol>",     // The expected symbol at cell i at time t+1
   "observables": [],               // Leave empty - not needed
   "claim_ast": null,               // Leave null - the harness uses trigger/result fields directly
 
 OPTIONAL: neighbor_pattern for CONTEXT-DEPENDENT rules:
-  "neighbor_pattern": "<3-char>",  // The required neighborhood [left,center,right] (e.g., "A_B")
+  "neighbor_pattern": "<3-char>",  // The required neighborhood [left,center,right] (e.g., "AWB")
 
 OPTIONAL: required_parity for INDEX-PARITY rules:
   "required_parity": 0 or 1,       // 0 = even indices only, 1 = odd indices only
@@ -252,12 +253,12 @@ You can combine both: neighbor_pattern AND required_parity for highly specific r
 
 EXAMPLES:
   "Every K disappears immediately" → trigger_symbol="K", result_op="!=", result_symbol="K"
-  "Background cells stay background" → trigger_symbol="_", result_op="==", result_symbol="_"
+  "W cells remain W" → trigger_symbol="W", result_op="==", result_symbol="W"
   "A-states persist" → trigger_symbol="A", result_op="==", result_symbol="A"
 
   CONTEXT-DEPENDENT (with neighbor_pattern):
-  "Background cells with A_B neighborhood become K" → trigger_symbol="_", neighbor_pattern="A_B", result_op="==", result_symbol="K"
-  "A-states in A__ neighborhood stay A" → trigger_symbol="A", neighbor_pattern="A__", result_op="==", result_symbol="A"
+  "W cells with AWB neighborhood become K" → trigger_symbol="W", neighbor_pattern="AWB", result_op="==", result_symbol="K"
+  "A-states in AWW neighborhood stay A" → trigger_symbol="A", neighbor_pattern="AWW", result_op="==", result_symbol="A"
 
   PARITY-DEPENDENT (with required_parity):
   "A-states at even indices become B" → trigger_symbol="A", required_parity=0, result_op="==", result_symbol="B"
@@ -305,7 +306,7 @@ For symmetry_commutation: include "transform" field, claim_ast can be null
 Your response MUST be a JSON object with two fields:
 
 {
-  "research_log": "Your internal model of this universe and key lessons learned (max 200 words). Summarize: (1) What patterns you've discovered, (2) What assumptions were proven wrong by counterexamples, (3) What hypotheses you're now testing.",
+  "research_log": "Your CUMULATIVE SUMMARY — a structured, living document you UPDATE each iteration (see below).",
   "candidate_laws": [
     {
       "law_id": "unique_identifier",
@@ -319,8 +320,43 @@ Your response MUST be a JSON object with two fields:
   ]
 }
 
-The research_log is YOUR NOTEBOOK - use it to maintain continuity between iterations.
-Record your evolving understanding, not just the facts."""
+=== CUMULATIVE SUMMARY (research_log) ===
+
+The research_log is NOT a diary. It is a CUMULATIVE UNIFIED PICTURE of everything you
+know about this universe, updated each iteration. You are a Principal Investigator
+maintaining a running state of the field — not a lab technician recording daily notes.
+
+Your research_log MUST use exactly these four sections (use the headers as shown, max 500 words total).
+Every section MUST be present every iteration, even if empty (write "None yet." if empty).
+
+THE STANDARD MODEL (Fixed Laws):
+Invariants, symmetries, and conservation laws with strong support (high-power PASS results).
+Once a result appears here, STOP re-proposing laws that test it. Build on it instead.
+Only remove an entry if new evidence actively contradicts it — and if so, move it to
+THE FALSIFICATION GRAVEYARD with a note.
+Format: "- [name]: [statement] (supported by: law_xxx, law_yyy)"
+
+THE REACTION MANUAL (Local Rules):
+Confirmed local transition rules — what happens when specific spatial configurations
+are encountered. This is the operational handbook of the universe's dynamics.
+Format: "- [input pattern] -> [output pattern] (supported by: law_xxx)"
+
+THE FALSIFICATION GRAVEYARD:
+Hypotheses that have been CONCLUSIVELY DISPROVEN by counterexamples. This section
+exists to prevent you from re-proposing dead ideas. Every entry records: what was
+believed, what killed it, and why it cannot be revived.
+DO NOT remove entries from this section. It is append-only.
+Format: "- [dead hypothesis]: DISPROVEN by [law_xxx/counterexample]. Reason: [why]"
+
+THE FRONTIER (Active Anomalies):
+Current contradictions, open questions, and hypotheses you are actively testing.
+This is where your candidate_laws should come from — not from re-proving settled science.
+Format: "- [question/anomaly]: [current evidence for/against]"
+
+IMPORTANT: If a previous cumulative summary is provided, UPDATE it — do not rewrite from
+scratch. Promote results from THE FRONTIER to THE STANDARD MODEL or REACTION MANUAL when
+evidence is strong. Move disproven ideas to THE GRAVEYARD. The summary should show clear
+iteration-over-iteration progress."""
 
 
 class PromptBuilder:
@@ -523,23 +559,29 @@ For symmetry_commutation: include "transform" field, claim_ast can be null."""
         return "\n".join(lines)
 
     def _build_research_log_section(self, previous_log: str) -> str:
-        """Build section containing the LLM's previous research notes.
+        """Build section containing the LLM's previous cumulative summary.
 
         This enables the LLM to maintain continuity across iterations,
-        moving from random search to hypothesis refinement.
+        building on settled science rather than re-discovering it.
 
         INTEGRITY NOTE: The content of the log is written BY the LLM itself
         in the previous iteration. We are providing a storage buffer, not
         injecting external knowledge.
         """
-        return f"""=== YOUR RESEARCH LOG (FROM PREVIOUS TURN) ===
+        return f"""=== YOUR PREVIOUS CUMULATIVE SUMMARY ===
 
-Below are your notes from the last iteration. Use them to maintain continuity
-in your reasoning. Build on your previous insights rather than starting fresh.
+Below is your cumulative summary from the last iteration. UPDATE this document
+rather than rewriting from scratch:
+- Promote well-supported hypotheses from THE FRONTIER to THE STANDARD MODEL or THE REACTION MANUAL
+- Add newly discovered transitions to THE REACTION MANUAL
+- Move decisively falsified ideas from THE FRONTIER to THE FALSIFICATION GRAVEYARD
+- Add new contradictions or surprises to THE FRONTIER
+- Do NOT re-propose laws for items already in THE STANDARD MODEL
+- NEVER remove entries from THE FALSIFICATION GRAVEYARD — it is append-only
 
 {previous_log}
 
-=== END OF PREVIOUS LOG ==="""
+=== END OF PREVIOUS SUMMARY ==="""
 
     def _build_accepted_section(self, laws: list[dict[str, Any]]) -> str:
         """Build accepted laws section."""
@@ -901,13 +943,16 @@ WHAT TO EXPLORE:
         lines.extend([
             "",
             "Output a JSON object with:",
-            '  "research_log": your updated notes on this universe (max 200 words)',
+            '  "research_log": your UPDATED cumulative summary (4 sections, max 500 words)',
             '  "candidate_laws": array of CandidateLaw objects',
             "",
-            "Your research_log should record:",
-            "- Patterns you've confirmed (what laws passed)",
-            "- Assumptions proven wrong (what counterexamples taught you)",
-            "- Your current working model of how this universe behaves",
+            "Your research_log MUST contain these four sections:",
+            "- THE STANDARD MODEL (Fixed Laws): Settled invariants and conservation laws",
+            "- THE REACTION MANUAL (Local Rules): Confirmed local transitions",
+            "- THE FALSIFICATION GRAVEYARD: Dead hypotheses (append-only, never re-propose these)",
+            "- THE FRONTIER (Active Anomalies): Open questions driving your new candidate_laws",
+            "",
+            "Focus your candidate_laws on THE FRONTIER, not on re-proving THE STANDARD MODEL.",
         ])
 
         return "\n".join(lines)

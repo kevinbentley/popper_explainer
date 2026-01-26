@@ -240,7 +240,7 @@ def run_orchestration(args) -> int:
             config.max_phase_iterations[phase] = args.max_phase_iterations
 
     # Create LLM loggers for capturing all LLM interactions
-    model_name = "gemini-2.5-flash" if not args.mock_llm else "mock"
+    model_name = "gemini-3-flash" if not args.mock_llm else "mock"
     proposer_logger = LLMLogger(repo, component="law_proposer", model_name=model_name)
     theorem_logger = LLMLogger(repo, component="theorem_generator", model_name=model_name)
     explanation_logger = LLMLogger(repo, component="explanation_generator", model_name=model_name)

@@ -9,6 +9,7 @@ from typing import Any, TYPE_CHECKING
 from src.theorem.models import LawSnapshot
 
 if TYPE_CHECKING:
+    from src.db.models import TheoremRecord
     from src.proposer.scrambler import SymbolScrambler
 
 # =============================================================================
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
 # =============================================================================
 # Increment this version when making semantic changes to the prompt template.
 # This enables reproducibility by tracking which prompt version was used.
-PROMPT_TEMPLATE_VERSION = "1.0.0"
+PROMPT_TEMPLATE_VERSION = "1.4.0"
 
 THEOREM_GENERATION_PROMPT = """You are a Popperian scientist building toward a complete understanding of an unknown universe.
 
@@ -43,7 +44,7 @@ You embody Karl Popper's philosophy at a higher level of abstraction:
 - A set of candidate laws with status in {{PASS, FAIL, UNKNOWN}}
 - Each law has been empirically tested against the universe dynamics
 - You do NOT have access to the underlying simulator or code
-- You must treat all PASS/FAIL outcomes as authoritative
+- You should treat FAIL outcomes as strong evidence, and PASS outcomes as provisional support (see EPISTEMIC CAUTION below)
 
 === WHAT IS A THEOREM? ===
 
@@ -81,16 +82,40 @@ A theorem is NOT:
    - If you cannot form coherent theorems, note what's MISSING
    - This feedback helps guide discovery back to productive territory
 
+=== EPISTEMIC CAUTION: BE YOUR OWN DEVIL'S ADVOCATE ===
+
+A core Popperian principle: corroboration is NOT confirmation. Apply these rules rigorously:
+
+1. A PASS law is not a proven law.
+   - PASS means the harness failed to falsify it within a finite test budget.
+   - The law may hold only in tested regions of the state space, and break elsewhere.
+   - Do NOT treat a cluster of PASS results as certainty. Ask: "What test HASN'T been run that could break this?"
+
+2. A FAIL result is stronger evidence — but not infallible.
+   - FAIL means a counterexample was found, which is concrete and reproducible.
+   - However, measurement or encoding errors can produce spurious failures.
+   - When a FAIL contradicts multiple PASS laws, consider whether the failure might stem from a boundary condition, an edge case in the test harness, or a misspecified observable — not necessarily a wrong theorem.
+
+3. Actively challenge your own theorems.
+   - For each theorem you propose or carry forward, ask: "What would make me doubt this?"
+   - If new laws (PASS or FAIL) have appeared since the theorem was last affirmed, re-evaluate it honestly. Do NOT preserve a theorem out of inertia.
+   - If two theorems conflict, do not quietly drop one. Explicitly state the contradiction and reason about which has stronger support, or whether both need revision.
+
+4. When contradictions arise, diagnose before discarding.
+   - A contradiction between laws may indicate a missing variable, a scope error, or a flawed observable definition — not necessarily that one law is wrong.
+   - Before retracting a theorem, consider: Is the problem in the theorem itself, in the laws that support it, or in how the observables are defined?
+   - Use the "failure_modes" and "missing_structure" fields to record your diagnostic reasoning.
+
 {observable_glossary}
 ---
 
 ### OUTPUT FORMAT (STRICT JSON)
 
-Output a JSON object with your research notebook and theorems:
+Output a JSON object with your cumulative summary and theorems:
 
 ```json
 {{
-  "research_log": "Your theoretical notebook (max 300 words). Record: (1) What unified patterns you see across laws, (2) What the failures taught you about boundaries, (3) What mechanistic hypotheses you're developing, (4) What additional laws or observables might be needed.",
+  "research_log": "Your CUMULATIVE SUMMARY (see structure below). This is a living document that you UPDATE each iteration — not a fresh notebook.",
   "theorems": [
     {{
       "name": "Short descriptive name",
@@ -109,8 +134,57 @@ Output a JSON object with your research notebook and theorems:
 }}
 ```
 
-The research_log is YOUR THEORETICAL NOTEBOOK - use it to maintain continuity across iterations.
-Record your evolving understanding of the universe's deep structure.
+=== CUMULATIVE SUMMARY (research_log) ===
+
+The research_log is NOT a diary of today's observations. It is a CUMULATIVE UNIFIED PICTURE
+of everything you know, updated each iteration. Think of yourself as a Principal Investigator
+maintaining a running state of the field — not a lab technician recording daily notes.
+
+Your research_log MUST contain exactly these four sections (use the headers as shown, max 500 words total).
+Every section MUST be present in every iteration, even if empty (write "None yet." if empty).
+
+**THE STANDARD MODEL (Fixed Laws):**
+Invariants, symmetries, and conservation laws that have survived extensive testing
+(high statistical power, ideally >1000 test cases — use the Power metrics on each law
+to judge). These are the bedrock of your understanding.
+Once a result appears here, STOP re-verifying it. Build on it. Only remove an entry
+if new evidence actively contradicts it — and if you do remove it, move it to
+THE FALSIFICATION GRAVEYARD with a note explaining why.
+Format: "- [name]: [statement] (supported by: law_xxx, law_yyy)"
+
+**THE REACTION MANUAL (Local Rules):**
+Confirmed local transition rules — what happens when specific spatial configurations
+are encountered. This is the operational handbook of the universe's dynamics.
+Each entry should describe a local pattern and its deterministic outcome.
+Format: "- [input pattern] -> [output pattern] (supported by: law_xxx)"
+
+**THE FALSIFICATION GRAVEYARD:**
+Theories and hypotheses that have been CONCLUSIVELY DISPROVEN. This section exists
+to prevent you from re-proposing or re-testing dead ideas. Every entry records:
+what was believed, what evidence killed it, and why it cannot be revived.
+DO NOT remove entries from this section. It is append-only.
+If a previously dead theory is resurrected by new evidence, move it to THE FRONTIER
+with an explicit note explaining what changed.
+Format: "- [dead theory]: DISPROVEN by [law_xxx/counterexample]. Reason: [why it failed]"
+
+**THE FRONTIER (Active Anomalies):**
+Current contradictions, open questions, and hypotheses under active investigation.
+For each entry, note: (1) what the anomaly or question is, (2) what evidence exists
+for and against, and (3) your current diagnostic hypothesis about root cause
+(missing variable? scope error? encoding issue? boundary condition?).
+These are where your theorem slots and discovery_requests should focus — not on
+re-proving items already in THE STANDARD MODEL.
+Format: "- [anomaly/question]: [evidence summary] | Diagnosis: [current hypothesis]"
+
+IMPORTANT RULES FOR UPDATING:
+- If a previous cumulative summary is provided, UPDATE it — do not rewrite from scratch.
+- Promote results: FRONTIER -> STANDARD MODEL or REACTION MANUAL when evidence is strong.
+- Demote results: STANDARD MODEL -> FRONTIER if new evidence raises doubt.
+- Kill results: FRONTIER -> GRAVEYARD when decisively falsified.
+- Resurrect (rare): GRAVEYARD -> FRONTIER only if genuinely new evidence warrants it.
+- The summary should show clear iteration-over-iteration progress. If the same items
+  appear in THE FRONTIER for multiple iterations with no new evidence, note the stall
+  and request specific laws or observables that would break the deadlock.
 
 Support roles:
 - "confirms": Law directly supports the theorem's claim
@@ -146,6 +220,8 @@ This feedback will guide the discovery phase to explore productive territory.
 Produce {target_count} theorems.
 
 {previous_research_log_section}
+
+{existing_theorems_section}
 ---
 
 ### LAWS
@@ -295,18 +371,107 @@ def build_previous_research_log_section(previous_log: str | None) -> str:
         Formatted section string
     """
     if not previous_log:
-        return ""
+        return """---
+
+### YOUR PREVIOUS CUMULATIVE SUMMARY
+
+No previous summary exists. This is your first iteration. Create the initial
+cumulative summary with all four sections:
+- THE STANDARD MODEL: Populate from the strongest PASS laws (high power metrics)
+- THE REACTION MANUAL: Any confirmed local transitions
+- THE FALSIFICATION GRAVEYARD: Any FAIL laws that kill obvious hypotheses
+- THE FRONTIER: Open questions and contradictions to investigate next"""
 
     return f"""---
 
-### YOUR PREVIOUS RESEARCH LOG
+### YOUR PREVIOUS CUMULATIVE SUMMARY
 
-Below are your theoretical notes from the last iteration. Build on these insights
-rather than starting fresh. Your understanding should deepen over time.
+Below is your cumulative summary from the last iteration. UPDATE this document
+rather than rewriting from scratch:
+- Promote well-supported hypotheses from THE FRONTIER to THE STANDARD MODEL or THE REACTION MANUAL
+- Add newly discovered transitions to THE REACTION MANUAL
+- Move decisively falsified theories from THE FRONTIER to THE FALSIFICATION GRAVEYARD
+- Add new contradictions or surprises to THE FRONTIER
+- Do NOT re-verify items already in THE STANDARD MODEL unless new evidence contradicts them
+- NEVER remove entries from THE FALSIFICATION GRAVEYARD — it is append-only
 
 {previous_log}
 
-### END OF PREVIOUS LOG"""
+### END OF PREVIOUS SUMMARY"""
+
+
+def build_existing_theorems_section(
+    theorems: list[TheoremRecord],
+    scrambler: SymbolScrambler | None = None,
+) -> str:
+    """Build a section presenting existing theorems for continuity.
+
+    Formats previously generated theorems so the LLM can confirm,
+    refine, supersede, or retract them rather than starting from scratch.
+
+    Args:
+        theorems: List of TheoremRecord objects from the database
+        scrambler: Symbol scrambler for translating physical symbols
+
+    Returns:
+        Formatted markdown section, or empty string if no theorems
+    """
+    if not theorems:
+        return ""
+
+    lines = [
+        "---",
+        "",
+        "### EXISTING THEOREMS",
+        "",
+        "These theorems were generated in previous iterations. You should:",
+        "- CONFIRM theorems that remain well-supported by the laws",
+        "- REFINE theorems where new laws suggest modifications",
+        "- SUPERSEDE theorems with better formulations",
+        "- RETRACT theorems contradicted by new evidence",
+        "- BUILD ON existing insights rather than starting from scratch",
+        "",
+        "Include your existing theorems (updated as needed) in your output along with any new ones.",
+        "",
+    ]
+
+    for theorem in theorems:
+        # Scramble claim text if scrambler available
+        claim = theorem.claim
+        if scrambler:
+            claim = scrambler.translate_observable_expr(claim, to_physical=False)
+
+        lines.append(f"- **{theorem.theorem_id}** (Status: {theorem.status})")
+        lines.append(f"  Name: {theorem.name}")
+        lines.append(f"  Claim: {claim}")
+
+        # Parse and format support references
+        if theorem.support_json:
+            try:
+                support = json.loads(theorem.support_json)
+                if support:
+                    support_parts = []
+                    for s in support:
+                        law_id = s.get("law_id", "?")
+                        role = s.get("role", "?")
+                        support_parts.append(f"{law_id} ({role})")
+                    lines.append(f"  Supported by: {', '.join(support_parts)}")
+            except json.JSONDecodeError:
+                pass
+
+        # Parse and format failure modes
+        if theorem.failure_modes_json:
+            try:
+                failure_modes = json.loads(theorem.failure_modes_json)
+                if failure_modes:
+                    modes_str = "; ".join(str(fm) for fm in failure_modes)
+                    lines.append(f"  Failure modes: {modes_str}")
+            except json.JSONDecodeError:
+                pass
+
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 def build_prompt(
@@ -315,6 +480,7 @@ def build_prompt(
     include_glossary: bool = True,
     previous_research_log: str | None = None,
     scrambler: SymbolScrambler | None = None,
+    existing_theorems: list[TheoremRecord] | None = None,
 ) -> str:
     """Build the full theorem generation prompt.
 
@@ -335,11 +501,15 @@ def build_prompt(
         else ""
     )
     previous_research_log_section = build_previous_research_log_section(previous_research_log)
+    existing_theorems_section = build_existing_theorems_section(
+        existing_theorems or [], scrambler=scrambler,
+    )
     return THEOREM_GENERATION_PROMPT.format(
         target_count=target_count,
         laws_section=laws_section,
         observable_glossary=observable_glossary,
         previous_research_log_section=previous_research_log_section,
+        existing_theorems_section=existing_theorems_section,
     )
 
 

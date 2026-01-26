@@ -24,13 +24,16 @@ class AbstractSymbol(str, Enum):
     """Abstract symbols used in LLM prompts to prevent physics inference.
 
     The LLM sees these neutral symbols instead of physical ones:
-    _ = Background (maps to .)
-    A = Chiral-1 (maps to >)
-    B = Chiral-2 (maps to <)
-    K = Kinetic (maps to X)
+    W (maps to .)
+    A (maps to >)
+    B (maps to <)
+    K (maps to X)
+
+    No descriptive labels are attached — the LLM must discover all
+    properties through experimentation.
     """
 
-    BACKGROUND = "_"
+    BACKGROUND = "W"
     CHIRAL_1 = "A"
     CHIRAL_2 = "B"
     KINETIC = "K"

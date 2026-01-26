@@ -140,7 +140,7 @@ For FAIL verdicts, the counterexample includes:
                         # === local_transition specific fields ===
                         "trigger_symbol": {
                             "type": "string",
-                            "description": "For local_transition: cell symbol at time t (_, A, B, or K)",
+                            "description": "For local_transition: cell symbol at time t (W, A, B, or K)",
                         },
                         "result_op": {
                             "type": "string",
@@ -149,15 +149,15 @@ For FAIL verdicts, the counterexample includes:
                         },
                         "result_symbol": {
                             "type": "string",
-                            "description": "For local_transition: expected symbol at t+1 (_, A, B, or K)",
+                            "description": "For local_transition: expected symbol at t+1 (W, A, B, or K)",
                         },
                         "left_neighbor": {
                             "type": "string",
-                            "description": "For local_transition: symbol to LEFT of trigger (_, A, B, or K)",
+                            "description": "For local_transition: symbol to LEFT of trigger (W, A, B, or K)",
                         },
                         "right_neighbor": {
                             "type": "string",
-                            "description": "For local_transition: symbol to RIGHT of trigger (_, A, B, or K)",
+                            "description": "For local_transition: symbol to RIGHT of trigger (W, A, B, or K)",
                         },
                         "neighbor_pattern": {
                             "type": "string",

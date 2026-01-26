@@ -54,14 +54,20 @@ You embody Karl Popper's philosophy at the theory level:
 3. BE EXPLICIT: State failure modes and missing observables clearly
 4. PREFER LOCAL: When global-count-based explanations fail, think locally
 5. REQUEST HELP: If you can't form coherent theorems, specify what laws you need
+6. BE YOUR OWN DEVIL'S ADVOCATE: A PASS law is not a proven law — it merely survived testing so far. Actively challenge your own theorems each iteration. When contradictions arise, diagnose the root cause before discarding anything.
 
 === OUTPUT FORMAT ===
 
 Output a JSON object with:
-- "research_log": Your theoretical notebook (max 300 words)
+- "research_log": Your CUMULATIVE SUMMARY (structured, max 500 words) - a living document you UPDATE each iteration
 - "theorems": Array of theorem objects
 
-Your research_log maintains continuity - record your evolving understanding."""
+Your research_log is a cumulative unified picture with four mandatory sections:
+- THE STANDARD MODEL (Fixed Laws): Settled invariants and symmetries
+- THE REACTION MANUAL (Local Rules): Confirmed local transitions
+- THE FALSIFICATION GRAVEYARD: Dead theories (append-only — never re-test these)
+- THE FRONTIER (Active Anomalies): Current contradictions and open questions
+Update it each iteration — do not rewrite from scratch. Build on the Standard Model; spend your effort on the Frontier; bury dead theories in the Graveyard so you never revisit them."""
 
 
 @dataclass
@@ -204,12 +210,15 @@ class TheoremGenerator:
         self,
         law_snapshots: list[LawSnapshot],
         target_count: int | None = None,
+        existing_theorems: list[Any] | None = None,
     ) -> TheoremBatch:
         """Generate theorems from law snapshots.
 
         Args:
             law_snapshots: List of law snapshots to use as context
             target_count: Target number of theorems to generate
+            existing_theorems: Previously generated TheoremRecord objects
+                for continuity across iterations
 
         Returns:
             TheoremBatch with generated theorems and research_log
@@ -222,6 +231,7 @@ class TheoremGenerator:
             target_count,
             previous_research_log=self._research_log,
             scrambler=self._scrambler,
+            existing_theorems=existing_theorems,
         )
         prompt_hash = compute_prompt_hash(prompt)
         prompt_tokens = len(prompt) // 4  # Rough estimate
@@ -361,6 +371,7 @@ class TheoremGenerator:
         target_count: int | None = None,
         model_name: str = "unknown",
         model_params: dict[str, Any] | None = None,
+        existing_theorems: list[Any] | None = None,
     ) -> tuple[TheoremBatch, TheoremGenerationArtifact]:
         """Generate theorems with full artifact capture for reproducibility.
 
@@ -376,6 +387,8 @@ class TheoremGenerator:
             target_count: Target number of theorems to generate
             model_name: Name of the model being used
             model_params: Model parameters (temperature, max_tokens, etc.)
+            existing_theorems: Previously generated TheoremRecord objects
+                for continuity across iterations
 
         Returns:
             Tuple of (TheoremBatch, TheoremGenerationArtifact)
@@ -387,7 +400,12 @@ class TheoremGenerator:
         snapshot_hash = compute_snapshot_hash(law_snapshots)
 
         # Build prompt
-        prompt = build_prompt(law_snapshots, target_count, scrambler=self._scrambler)
+        prompt = build_prompt(
+            law_snapshots,
+            target_count,
+            scrambler=self._scrambler,
+            existing_theorems=existing_theorems,
+        )
         prompt_hash = compute_prompt_hash(prompt)
 
         # Call LLM and capture raw response
@@ -429,6 +447,17 @@ class TheoremGenerator:
             parsed_response=parsed_response,
             created_at=datetime.now(),
         )
+
+        # Log LLM call
+        if self._llm_logger:
+            self._llm_logger.log_call(
+                prompt=prompt,
+                response=raw_response,
+                success=True,
+                system_instruction=self.system_instruction,
+                research_log=parse_result.research_log if hasattr(parse_result, 'research_log') else None,
+                duration_ms=runtime_ms,
+            )
 
         # Add failure signatures to theorems
         for theorem in parse_result.theorems:

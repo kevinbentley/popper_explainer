@@ -98,11 +98,11 @@ class ExpressionParser:
         (r"max_gap", "FUNC"),
         (r"spread", "FUNC"),
         (r"count", "FUNC"),  # Must be after count_at_parity, count_even, count_odd, count_pattern
-        # Accept both physical symbols (.><X) and abstract symbols (_ABK)
-        (r"'([.><X_ABK]{3})'", "PATTERN"),  # 3-char neighborhood pattern (single quotes)
-        (r'"([.><X_ABK]{3})"', "PATTERN"),  # 3-char neighborhood pattern (double quotes)
-        (r"'([.><X_ABK])'", "SYMBOL"),  # Quoted symbol (1 char)
-        (r'"([.><X_ABK])"', "SYMBOL"),  # Double-quoted symbol also allowed (1 char)
+        # Accept both physical symbols (.><X) and abstract symbols (WABK)
+        (r"'([.><XWABK]{3})'", "PATTERN"),  # 3-char neighborhood pattern (single quotes)
+        (r'"([.><XWABK]{3})"', "PATTERN"),  # 3-char neighborhood pattern (double quotes)
+        (r"'([.><XWABK])'", "SYMBOL"),  # Quoted symbol (1 char)
+        (r'"([.><XWABK])"', "SYMBOL"),  # Double-quoted symbol also allowed (1 char)
         (r"\+", "OP"),
         (r"-", "OP"),
         (r"\*", "OP"),

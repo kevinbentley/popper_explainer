@@ -128,10 +128,14 @@ class TheoremPhaseHandler:
         if pass_count < 3:
             return self._insufficient_laws_control_block(context, pass_count)
 
+        # Fetch existing theorems for continuity across iterations
+        existing_theorems = repo.list_theorems()
+
         # Generate theorems
         batch, artifact = self.generator.generate_with_artifact(
             law_snapshots,
             model_name="gemini",
+            existing_theorems=existing_theorems,
         )
 
         # Analyze for refinement targets

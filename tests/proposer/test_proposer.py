@@ -107,9 +107,9 @@ class TestPromptBuilder:
 
         assert "FALSIFIED LAWS" in prompt
         assert "false_law" in prompt
-        # Scrambler converts physical symbols to abstract: > → A, . → _, < → B
-        # So ">..<" becomes "A__B"
-        assert "A__B" in prompt
+        # Scrambler converts physical symbols to abstract: > → A, . → W, < → B
+        # So ">..<" becomes "AWWB"
+        assert "AWWB" in prompt
 
     def test_target_templates(self):
         """Prompt includes target template guidance."""
@@ -253,6 +253,38 @@ class TestResponseParser:
 
         assert len(result.laws) == 1
         assert result.laws[0].law_id == "proposed_0"
+
+    def test_parse_null_optional_fields(self):
+        """Parser handles explicit null for optional fields without crashing.
+
+        Regression test: LLMs sometimes output "quantifiers": null instead of
+        omitting the field. dict.get("quantifiers", {}) returns None (not {})
+        when the key exists with a null value, causing 'NoneType' has no
+        attribute 'get' crashes.
+        """
+        parser = ResponseParser()
+        response = json.dumps([{
+            "law_id": "null_fields_law",
+            "template": "invariant",
+            "quantifiers": None,
+            "preconditions": None,
+            "observables": None,
+            "claim": "x(t) == x(0)",
+            "forbidden": "exists t where x(t) != x(0)",
+            "proposed_tests": None,
+            "capability_requirements": None,
+        }])
+
+        result = parser.parse(response)
+
+        assert len(result.laws) == 1
+        law = result.laws[0]
+        assert law.law_id == "null_fields_law"
+        assert law.template == Template.INVARIANT
+        # Null fields should get safe defaults
+        assert law.quantifiers.T == 50  # default
+        assert law.preconditions == []
+        assert law.observables == []
 
 
 class TestRedundancyDetector:

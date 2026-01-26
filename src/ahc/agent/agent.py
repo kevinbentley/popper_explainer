@@ -702,7 +702,7 @@ class AgentLoop:
                 return self._scrambler.to_physical(data)
             # For unknown keys, only unscramble if the string looks like symbol data
             # (single char or short string with only symbol chars)
-            if len(data) <= 100 and all(c in '_ABK' for c in data):
+            if len(data) <= 100 and all(c in 'WABK' for c in data):
                 return self._scrambler.to_physical(data)
             return data
         elif isinstance(data, dict):
@@ -755,8 +755,8 @@ class AgentLoop:
             return (
                 "You still have hypotheses to test. Remember:\n"
                 "- Use `left_neighbor` and `right_neighbor` to specify neighborhood context\n"
-                "- Example: trigger='A' with empty neighbors: left_neighbor='_', right_neighbor='_'\n"
-                "- Example: trigger='_' with A on left, K on right: left_neighbor='A', right_neighbor='K'\n"
+                "- Example: trigger='A' with W neighbors: left_neighbor='W', right_neighbor='W'\n"
+                "- Example: trigger='W' with A on left, K on right: left_neighbor='A', right_neighbor='K'\n"
                 "- Try the same hypothesis again with the correct fields.\n\n"
                 "Use evaluate_laws to test your next idea."
             )
@@ -776,12 +776,12 @@ class AgentLoop:
             # Fourth nudge - suggest systematic approach with specific examples
             return (
                 "Let me help you think systematically. Have you tested ALL these combinations?\n\n"
-                "For symbol _ (empty):\n"
-                "- What does '_' become when neighbors are '__' (pattern '___')?\n"
-                "- What about 'A_A', '_A_', 'B_B', '_B_', 'K_K', '_K_'?\n\n"
+                "For symbol W:\n"
+                "- What does 'W' become when neighbors are 'WW' (pattern 'WWW')?\n"
+                "- What about 'AWA', 'WAW', 'BWB', 'WBW', 'KWK', 'WKW'?\n\n"
                 "For symbol A:\n"
-                "- Pattern '_A_' (A with empty neighbors)?\n"
-                "- Pattern 'BA_', '_AB', 'AAA'?\n\n"
+                "- Pattern 'WAW' (A with W neighbors)?\n"
+                "- Pattern 'BAW', 'WAB', 'AAA'?\n\n"
                 "Each symbol + each neighbor combo is a testable hypothesis. What's missing?"
             )
 
@@ -790,12 +790,12 @@ class AgentLoop:
             cycle = (count - 5) % 3
             examples = [
                 (
-                    "Test what empty cells do with different neighbors:\n"
+                    "Test what W cells do with different neighbors:\n"
                     "```json\n"
-                    '{"template": "local_transition", "trigger_symbol": "_", '
-                    '"result_op": "==", "result_symbol": "_", '
-                    '"left_neighbor": "_", "right_neighbor": "_", '
-                    '"law_id": "empty_stays_empty"}\n'
+                    '{"template": "local_transition", "trigger_symbol": "W", '
+                    '"result_op": "==", "result_symbol": "W", '
+                    '"left_neighbor": "W", "right_neighbor": "W", '
+                    '"law_id": "W_stays_W"}\n'
                     "```"
                 ),
                 (
@@ -803,17 +803,17 @@ class AgentLoop:
                     "```json\n"
                     '{"template": "local_transition", "trigger_symbol": "A", '
                     '"result_op": "==", "result_symbol": "A", '
-                    '"left_neighbor": "_", "right_neighbor": "_", '
+                    '"left_neighbor": "W", "right_neighbor": "W", '
                     '"law_id": "A_alone_stable"}\n'
                     "```"
                 ),
                 (
-                    "Test collision behavior - what does K become?\n"
+                    "Test what K becomes with different neighbors:\n"
                     "```json\n"
                     '{"template": "local_transition", "trigger_symbol": "K", '
-                    '"result_op": "==", "result_symbol": "_", '
-                    '"left_neighbor": "_", "right_neighbor": "_", '
-                    '"law_id": "K_becomes_empty"}\n'
+                    '"result_op": "==", "result_symbol": "W", '
+                    '"left_neighbor": "W", "right_neighbor": "W", '
+                    '"law_id": "K_becomes_W"}\n'
                     "```"
                 ),
             ]
@@ -976,7 +976,7 @@ You embody Karl Popper's philosophy of science:
 ## THE UNIVERSE
 
 - 1D circular grid of cells (periodic boundary)
-- 4 abstract symbols: _, A, B, K
+- 4 abstract symbols: W, A, B, K
 - Time evolves in discrete steps
 - The symbol names tell you NOTHING about their physics - discover through experiments
 
@@ -1022,7 +1022,7 @@ Goal: Discover structural properties.
 You have instruments that measure numerical properties of states:
 
 **Symbol counts:**
-- count('_'), count('A'), count('B'), count('K') — count of each symbol
+- count('W'), count('A'), count('B'), count('K') — count of each symbol
 - count_even(sym), count_odd(sym) — count at even/odd indices
 - count_at_parity(sym, 0), count_at_parity(sym, 1) — explicit parity count
 
@@ -1035,7 +1035,7 @@ You have instruments that measure numerical properties of states:
 **Pattern detection:**
 - adjacent_pairs(s1, s2) — count of s1 immediately followed by s2
 - count_pattern(pat) — count of 3-cell neighborhoods matching pattern
-  Examples: count_pattern('A_B'), count_pattern('_K_'), count_pattern('A_A')
+  Examples: count_pattern('AWB'), count_pattern('WKW'), count_pattern('AWA')
 - transition_indicator — count related to future state transitions
 
 **Derived expressions** (combine with +, -, *):
@@ -1049,9 +1049,9 @@ Tests: for each cell i at each time t, if cell[i] == trigger, what is cell[i] at
 
 REQUIRED FIELDS:
 - template: "local_transition"
-- trigger_symbol: "_", "A", "B", or "K"
+- trigger_symbol: "W", "A", "B", or "K"
 - result_op: "==" or "!="
-- result_symbol: "_", "A", "B", or "K"
+- result_symbol: "W", "A", "B", or "K"
 - claim, forbidden: human-readable strings
 
 OPTIONAL: left_neighbor, right_neighbor (both required if either is specified)
@@ -1062,7 +1062,7 @@ OPTIONAL: quantifiers (default {"T": 50})
 
 Example: {"law_id": "A_stays_A", "template": "local_transition", "trigger_symbol": "A", "result_op": "==", "result_symbol": "A", "claim": "A cells stay A", "forbidden": "A becomes non-A"}
 
-Example with neighbors: {"law_id": "A_empty_neighbors", "template": "local_transition", "trigger_symbol": "A", "result_op": "==", "result_symbol": "A", "left_neighbor": "_", "right_neighbor": "_", "claim": "A with empty neighbors stays A", "forbidden": "A changes with empty neighbors"}
+Example with neighbors: {"law_id": "A_W_neighbors", "template": "local_transition", "trigger_symbol": "A", "result_op": "==", "result_symbol": "A", "left_neighbor": "W", "right_neighbor": "W", "claim": "A with W neighbors stays A", "forbidden": "A changes with W neighbors"}
 
 Example with parity: {"law_id": "A_even_becomes_B", "template": "local_transition", "trigger_symbol": "A", "result_op": "==", "result_symbol": "B", "required_parity": 0, "claim": "A at even indices becomes B", "forbidden": "A at even index does not become B"}
 
@@ -1201,8 +1201,8 @@ Your only path to knowledge is through FALSIFICATION.
 IMPORTANT: Always write your LAB NOTE before making a tool call. Here's the format:
 
 ---
-LAB NOTE: Starting with the simplest hypothesis - do _ cells remain unchanged?
-This is a good baseline test. If _ cells persist, they might represent "empty space".
+LAB NOTE: Starting with the simplest hypothesis - do W cells remain unchanged?
+This is a good baseline test. If W cells persist, that tells us something about their role.
 If they change, something more complex is happening.
 
 [Then make your tool call]

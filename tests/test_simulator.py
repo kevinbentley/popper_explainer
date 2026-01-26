@@ -26,7 +26,7 @@ class TestTypes:
         assert "<" in VALID_SYMBOLS
         assert "X" in VALID_SYMBOLS
         # Abstract symbols (for LLM interface)
-        assert "_" in VALID_SYMBOLS
+        assert "W" in VALID_SYMBOLS
         assert "A" in VALID_SYMBOLS
         assert "B" in VALID_SYMBOLS
         assert "K" in VALID_SYMBOLS

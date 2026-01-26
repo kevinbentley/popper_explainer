@@ -257,13 +257,15 @@ class ResponseParser:
         template = Template(template_str)
 
         # Parse quantifiers
-        quantifiers = self._parse_quantifiers(data.get("quantifiers", {}))
+        # Use `or {}` to handle explicit null values from LLM (dict.get only
+        # returns the default when the key is absent, not when it's null)
+        quantifiers = self._parse_quantifiers(data.get("quantifiers") or {})
 
         # Parse preconditions
-        preconditions = self._parse_preconditions(data.get("preconditions", []))
+        preconditions = self._parse_preconditions(data.get("preconditions") or [])
 
         # Parse observables
-        observables = self._parse_observables(data.get("observables", []))
+        observables = self._parse_observables(data.get("observables") or [])
 
         # Validate claim_ast if provided
         claim_ast = data.get("claim_ast")
@@ -275,11 +277,11 @@ class ResponseParser:
                 raise ParseError(f"Invalid claim_ast: {'; '.join(error_msgs)}", data)
 
         # Parse proposed tests
-        proposed_tests = self._parse_proposed_tests(data.get("proposed_tests", []))
+        proposed_tests = self._parse_proposed_tests(data.get("proposed_tests") or [])
 
         # Parse capability requirements
         capability_requirements = self._parse_capability_requirements(
-            data.get("capability_requirements", {})
+            data.get("capability_requirements") or {}
         )
 
         # Parse direction for monotone
@@ -319,8 +321,8 @@ class ResponseParser:
                     f"Invalid neighbor_pattern '{neighbor_pattern}' - must be 3 characters"
                 )
                 neighbor_pattern = None
-            # Accept both physical (.><X) and abstract (_ABK) symbols
-            elif not all(c in '.><X_ABK' for c in neighbor_pattern):
+            # Accept both physical (.><X) and abstract (WABK) symbols
+            elif not all(c in '.><XWABK' for c in neighbor_pattern):
                 self._warnings.append(
                     f"Invalid neighbor_pattern '{neighbor_pattern}' - must contain only valid symbols"
                 )

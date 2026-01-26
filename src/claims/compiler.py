@@ -284,8 +284,8 @@ class ClaimCompiler:
                 raise CompilationError(
                     f"neighbor_pattern must be exactly 3 characters, got '{neighbor_pattern}'"
                 )
-            # Accept both physical (.><X) and abstract (_ABK) symbols
-            valid_symbols = set('.><X_ABK')
+            # Accept both physical (.><X) and abstract (WABK) symbols
+            valid_symbols = set('.><XWABK')
             if not all(c in valid_symbols for c in neighbor_pattern):
                 raise CompilationError(
                     f"neighbor_pattern must contain only valid symbols, got '{neighbor_pattern}'"

@@ -513,7 +513,7 @@ class LocalTransitionChecker(TemplateChecker):
                 raise ValueError(
                     f"neighbor_pattern must be exactly 3 characters, got '{neighbor_pattern}'"
                 )
-            valid_symbols = set('.><X_ABK')  # Accept both physical and abstract symbols
+            valid_symbols = set('.><XWABK')  # Accept both physical and abstract symbols
             if not all(c in valid_symbols for c in neighbor_pattern):
                 raise ValueError(
                     f"neighbor_pattern must contain only valid symbols, got '{neighbor_pattern}'"

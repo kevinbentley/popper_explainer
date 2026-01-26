@@ -89,13 +89,9 @@ Synthesize the validated theorems into a PREDICTIVE MECHANISM that can:
 
 === UNIVERSE DESCRIPTION ===
 
-The universe is a 1D grid with periodic boundaries containing 4 abstract symbols:
-- _ (Background)
-- A (Chiral-1)
-- B (Chiral-2)
-- K (Kinetic)
+The universe is a 1D grid with periodic boundaries containing 4 abstract symbols: W, A, B, K
 
-The symbol names tell you NOTHING about their physics - discover through the theorems below.
+The symbol names carry no meaning. All properties must be derived from the theorems below.
 
 === VALIDATED THEOREMS ===
 
@@ -504,29 +500,29 @@ rather than starting fresh. Your understanding should deepen over time.
             MechanismRule(
                 rule_id="movement_A",
                 rule_type=MechanismType.MOVEMENT,
-                condition="Cell contains A (Chiral-1)",
+                condition="Cell contains A",
                 effect="A moves one cell in its characteristic direction",
                 priority=0,
             ),
             MechanismRule(
                 rule_id="movement_B",
                 rule_type=MechanismType.MOVEMENT,
-                condition="Cell contains B (Chiral-2)",
+                condition="Cell contains B",
                 effect="B moves one cell in its characteristic direction",
                 priority=0,
             ),
             MechanismRule(
-                rule_id="kinetic_formation",
+                rule_id="interaction_formation",
                 rule_type=MechanismType.INTERACTION,
                 condition="A and B attempt to occupy the same cell",
-                effect="K (Kinetic) state forms at that cell",
+                effect="K state forms at that cell",
                 priority=1,
             ),
             MechanismRule(
-                rule_id="kinetic_resolution",
+                rule_id="interaction_resolution",
                 rule_type=MechanismType.TRANSFORMATION,
-                condition="Cell contains K (Kinetic)",
-                effect="A exits one direction, B exits the other, cell becomes _",
+                condition="Cell contains K",
+                effect="A exits one direction, B exits the other, cell becomes W",
                 priority=2,
             ),
             MechanismRule(

@@ -9,20 +9,18 @@ The Problem:
 - This undermines the Popperian methodology
 
 The Solution:
-- Present the LLM with abstract symbols (_, A, B, K)
+- Present the LLM with abstract symbols (W, A, B, K)
 - Translate LLM proposals from abstract to physical before testing
 - Translate results back to abstract for LLM feedback
 
 Scramble Mapping (default):
-    . → _ (Background)
-    > → A (Chiral State 1)
-    < → B (Chiral State 2)
-    X → K (Kinetic Storage)
+    . → W
+    > → A
+    < → B
+    X → K
 
-The mapping uses neutral names that don't suggest physics:
-- "Background" instead of "empty" (which suggests void/absence)
-- "Chiral State 1/2" instead of "right/left" (suggests handedness, not direction)
-- "Kinetic Storage" instead of "collision" (suggests energy, not impact)
+No descriptive labels are attached to the abstract symbols. The LLM must
+discover all properties through experimentation, not from symbol names.
 """
 
 from __future__ import annotations
@@ -56,7 +54,7 @@ class SymbolScrambler:
         abstract_state = scrambler.to_abstract("..><..")
 
         # In response parsing (LLM uses abstract symbols):
-        physical_state = scrambler.to_physical("__AB__")
+        physical_state = scrambler.to_physical("WWABWW")
 
         # For law translation:
         physical_law = scrambler.translate_law_to_physical(abstract_law)
@@ -64,10 +62,10 @@ class SymbolScrambler:
     """
 
     mappings: list[SymbolMapping] = field(default_factory=lambda: [
-        SymbolMapping(".", "_", "Background"),
-        SymbolMapping(">", "A", "Chiral-1"),
-        SymbolMapping("<", "B", "Chiral-2"),
-        SymbolMapping("X", "K", "Kinetic"),
+        SymbolMapping(".", "W", "Symbol W"),
+        SymbolMapping(">", "A", "Symbol A"),
+        SymbolMapping("<", "B", "Symbol B"),
+        SymbolMapping("X", "K", "Symbol K"),
     ])
 
     def __post_init__(self):
