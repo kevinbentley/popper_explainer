@@ -19,6 +19,7 @@ class ReasonCode(str, Enum):
     RESOURCE_LIMIT = "resource_limit"
     INCONCLUSIVE_LOW_POWER = "inconclusive_low_power"
     VACUOUS_PASS = "vacuous_pass"
+    TAUTOLOGICAL_CLAIM = "tautological_claim"
 
 
 class FailureType(str, Enum):

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from src.db.models import CounterexampleRecord, EvaluationRecord, LawRecord
 from src.db.repo import Repository
+from src.proposer.scrambler import SymbolScrambler, get_default_scrambler
 from src.theorem.models import LawSnapshot, Theorem, TheoremBatch, TheoremGenerationArtifact
 from src.theorem.parser import TheoremParser
 from src.theorem.prompt import (
@@ -34,14 +35,33 @@ class LLMClient(Protocol):
 
 
 # System instruction for theorem generation
-THEOREM_SYSTEM_INSTRUCTION = """You are a Popperian theory-construction agent. Your role is to synthesize empirically-tested laws into higher-level theorems that explain patterns in the data.
+THEOREM_SYSTEM_INSTRUCTION = """You are a Popperian scientist in the THEOREM PHASE of a three-phase discovery process.
 
-Key principles:
-1. Theorems must combine multiple laws - never just restate a single law
-2. Use both PASS laws (reliable patterns) and FAIL laws (boundaries/constraints)
-3. Be explicit about failure modes and missing observables
-4. Prefer local explanations over global-count-based ones when counts fail
-5. Output valid JSON only - no markdown, no explanations outside JSON"""
+Your mission: Synthesize empirically-tested laws into deeper theoretical structure that moves toward PREDICTION.
+
+=== YOUR SCIENTIFIC IDENTITY ===
+
+You embody Karl Popper's philosophy at the theory level:
+- Laws tell you WHAT patterns hold; your theorems explain WHY they hold together
+- Failed laws constrain the space of possible theories - use them
+- Your theorems must be FALSIFIABLE - state what would prove them wrong
+- If the laws are insufficient, request more from the discovery phase
+
+=== KEY PRINCIPLES ===
+
+1. SYNTHESIZE: Theorems must combine multiple laws - never just restate a single law
+2. USE FAILURES: FAIL laws reveal boundaries and missing variables - they are gold
+3. BE EXPLICIT: State failure modes and missing observables clearly
+4. PREFER LOCAL: When global-count-based explanations fail, think locally
+5. REQUEST HELP: If you can't form coherent theorems, specify what laws you need
+
+=== OUTPUT FORMAT ===
+
+Output a JSON object with:
+- "research_log": Your theoretical notebook (max 300 words)
+- "theorems": Array of theorem objects
+
+Your research_log maintains continuity - record your evolving understanding."""
 
 
 @dataclass
@@ -62,12 +82,17 @@ class TheoremGenerator:
         config: TheoremGeneratorConfig | None = None,
         system_instruction: str | None = None,
         llm_logger: LLMLogger | None = None,
+        scrambler: SymbolScrambler | None = None,
     ):
         self.client = client
         self.config = config or TheoremGeneratorConfig()
         self.parser = TheoremParser()
         self.system_instruction = system_instruction or THEOREM_SYSTEM_INSTRUCTION
         self._llm_logger = llm_logger
+        self._scrambler = scrambler or get_default_scrambler()
+
+        # Research log for continuity across iterations
+        self._research_log: str | None = None
 
     def build_law_snapshot(
         self,
@@ -114,21 +139,28 @@ class TheoremGenerator:
         evaluation: EvaluationRecord,
         repo: Repository,
     ) -> LawSnapshot:
-        """Convert a law record and evaluation to a snapshot."""
+        """Convert a law record and evaluation to a snapshot.
+
+        All physical symbols are translated to abstract symbols before
+        being included in the snapshot, since snapshots are used to build
+        LLM prompts.
+        """
         # Parse the law JSON
         try:
             law_data = json.loads(law.law_json)
         except json.JSONDecodeError:
             law_data = {}
 
-        # Get counterexample if FAIL
+        # Get counterexample if FAIL — scramble state strings
         counterexample: dict[str, Any] | None = None
         if evaluation.status == "FAIL":
             cx_records = repo.get_counterexamples_for_law(law.law_id)
             if cx_records:
                 cx = cx_records[0]  # Most recent
                 counterexample = {
-                    "initial_state": cx.initial_state,
+                    "initial_state": self._scrambler.to_abstract(
+                        cx.initial_state
+                    ) if cx.initial_state else cx.initial_state,
                     "t_fail": cx.t_fail,
                     "t_max": cx.t_max,
                 }
@@ -141,18 +173,29 @@ class TheoremGenerator:
             except json.JSONDecodeError:
                 pass
 
-        # Extract claim text
+        # Extract claim text — scramble observable expressions in it
         claim = law_data.get("claim_text", law_data.get("claim", str(law_data)))
+        claim = self._scrambler.translate_observable_expr(claim, to_physical=False)
 
-        # Extract observables
+        # Extract observables — scramble expr fields
         observables = law_data.get("observables", [])
+        scrambled_observables = []
+        for obs in observables:
+            if obs is None:
+                continue
+            new_obs = obs.copy()
+            if "expr" in new_obs:
+                new_obs["expr"] = self._scrambler.translate_observable_expr(
+                    new_obs["expr"], to_physical=False
+                )
+            scrambled_observables.append(new_obs)
 
         return LawSnapshot(
             law_id=law.law_id,
             template=law.template,
             claim=claim,
             status=evaluation.status,
-            observables=observables,
+            observables=scrambled_observables,
             counterexample=counterexample,
             power_metrics=power_metrics,
         )
@@ -169,12 +212,17 @@ class TheoremGenerator:
             target_count: Target number of theorems to generate
 
         Returns:
-            TheoremBatch with generated theorems
+            TheoremBatch with generated theorems and research_log
         """
         target_count = target_count or self.config.target_theorem_count
 
-        # Build prompt
-        prompt = build_prompt(law_snapshots, target_count)
+        # Build prompt with previous research log for continuity
+        prompt = build_prompt(
+            law_snapshots,
+            target_count,
+            previous_research_log=self._research_log,
+            scrambler=self._scrambler,
+        )
         prompt_hash = compute_prompt_hash(prompt)
         prompt_tokens = len(prompt) // 4  # Rough estimate
 
@@ -202,20 +250,25 @@ class TheoremGenerator:
         finally:
             runtime_ms = int((time.time() - start_time) * 1000)
 
-            # Log LLM call
-            if self._llm_logger:
-                self._llm_logger.log_call(
-                    prompt=prompt,
-                    response=response,
-                    success=success,
-                    system_instruction=self.system_instruction,
-                    prompt_tokens=prompt_tokens,
-                    duration_ms=runtime_ms,
-                    error_message=error_message,
-                )
-
         # Parse response
         parse_result = self.parser.parse(response)
+
+        # Extract and store research log for next iteration
+        if parse_result.research_log:
+            self._research_log = parse_result.research_log
+
+        # Log LLM call (after parsing to include research_log)
+        if self._llm_logger:
+            self._llm_logger.log_call(
+                prompt=prompt,
+                response=response,
+                success=success,
+                system_instruction=self.system_instruction,
+                research_log=parse_result.research_log,
+                prompt_tokens=prompt_tokens,
+                duration_ms=runtime_ms,
+                error_message=error_message,
+            )
 
         # Add failure signatures to theorems
         for theorem in parse_result.theorems:
@@ -228,6 +281,7 @@ class TheoremGenerator:
             prompt_hash=prompt_hash,
             runtime_ms=runtime_ms,
             warnings=parse_result.warnings,
+            research_log=parse_result.research_log,
         )
 
     def generate_with_signatures(
@@ -278,6 +332,29 @@ class TheoremGenerator:
                 phase=phase,
             )
 
+    def get_research_log(self) -> str | None:
+        """Get the current research log.
+
+        Returns:
+            The LLM's theoretical notes from the most recent iteration
+        """
+        return self._research_log
+
+    def set_research_log(self, log: str | None) -> None:
+        """Set the research log for the next iteration.
+
+        This can be used to seed the generator with initial context
+        or to restore state from persistence.
+
+        Args:
+            log: Research log content
+        """
+        self._research_log = log
+
+    def clear_research_log(self) -> None:
+        """Clear the research log, starting fresh."""
+        self._research_log = None
+
     def generate_with_artifact(
         self,
         law_snapshots: list[LawSnapshot],
@@ -310,7 +387,7 @@ class TheoremGenerator:
         snapshot_hash = compute_snapshot_hash(law_snapshots)
 
         # Build prompt
-        prompt = build_prompt(law_snapshots, target_count)
+        prompt = build_prompt(law_snapshots, target_count, scrambler=self._scrambler)
         prompt_hash = compute_prompt_hash(prompt)
 
         # Call LLM and capture raw response

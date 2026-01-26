@@ -6,6 +6,7 @@ templates (how laws are checked).
 
 from typing import Callable
 
+from src.claims.ast_evaluator import ASTClaimEvaluator, create_ast_checker
 from src.claims.expr_ast import Expr
 from src.claims.expr_evaluator import evaluate_expression
 from src.claims.expr_parser import ExpressionParser, ParseError
@@ -38,6 +39,39 @@ class CompilationError(Exception):
     pass
 
 
+class ASTCheckerAdapter(TemplateChecker):
+    """Adapts ASTClaimEvaluator to the TemplateChecker interface.
+
+    This allows laws with claim_ast to use the same interface as
+    string-based compiled laws.
+    """
+
+    def __init__(self, ast_evaluator: ASTClaimEvaluator):
+        self._evaluator = ast_evaluator
+
+    def check(self, trajectory):
+        """Check the law against a trajectory.
+
+        Adapts the ASTClaimEvaluator.check() return format to CheckResult.
+        """
+        from src.claims.templates import CheckResult, Violation
+        from src.claims.vacuity import VacuityReport
+
+        passed, t_fail, details, vacuity = self._evaluator.check(trajectory)
+
+        if passed:
+            return CheckResult(passed=True, vacuity=vacuity or VacuityReport())
+
+        # Build violation from details
+        violation = Violation(
+            t=t_fail if t_fail is not None else 0,
+            state=trajectory[t_fail] if t_fail is not None and t_fail < len(trajectory) else trajectory[0],
+            details=details or {},
+            message=f"AST claim violated at t={t_fail}: {details}" if details else f"AST claim violated at t={t_fail}",
+        )
+        return CheckResult(passed=False, violation=violation, vacuity=vacuity or VacuityReport())
+
+
 class ClaimCompiler:
     """Compiles CandidateLaw objects into executable TrajectoryCheckers."""
 
@@ -57,6 +91,14 @@ class ClaimCompiler:
         Raises:
             CompilationError: If compilation fails
         """
+        # Try AST-based compilation first if claim_ast is present
+        # This handles structured claims from the LLM more robustly
+        if law.claim_ast is not None:
+            ast_evaluator = create_ast_checker(law)
+            if ast_evaluator is not None:
+                return ASTCheckerAdapter(ast_evaluator)
+
+        # Fall back to string-based compilation
         # First, compile all observable expressions
         self._compiled_observables = {}
         for obs in law.observables:
@@ -166,17 +208,34 @@ class ClaimCompiler:
         return EventuallyChecker(antecedent, consequent, law.quantifiers.H)
 
     def _compile_symmetry(self, law: CandidateLaw) -> SymmetryCommutationChecker:
-        """Compile a symmetry_commutation law."""
+        """Compile a symmetry_commutation law.
+
+        Handles parameterized transforms like shift_k:
+        - "shift_k" with default k=1
+        - "shift_1", "shift_2", etc. with explicit k value
+        - The k value is extracted and passed to the checker
+        """
         if law.transform is None:
             raise CompilationError("Symmetry_commutation requires 'transform' field")
 
-        if law.transform not in list_transforms():
+        transform_name = law.transform
+        shift_k_value: int | None = None
+
+        # Handle "shift_N" patterns (e.g., "shift_1", "shift_2")
+        import re
+        shift_match = re.match(r'^shift_(\d+)$', transform_name)
+        if shift_match:
+            shift_k_value = int(shift_match.group(1))
+            transform_name = "shift_k"  # Normalize to base transform name
+
+        # Validate the base transform name
+        if transform_name not in list_transforms():
             raise CompilationError(
                 f"Unknown transform '{law.transform}'. "
-                f"Available: {list_transforms()}"
+                f"Available: {list_transforms()} (shift_k accepts shift_N format, e.g., shift_1)"
             )
 
-        return SymmetryCommutationChecker(law.transform, law.quantifiers.T)
+        return SymmetryCommutationChecker(transform_name, law.quantifiers.T, shift_k_value)
 
     def _compile_local_transition(self, law: CandidateLaw) -> LocalTransitionChecker:
         """Compile a local_transition law.
@@ -184,29 +243,187 @@ class ClaimCompiler:
         Local transition expresses per-cell behavior:
         ∀t,i: state[i] == trigger_symbol at t → state[i] result_op result_symbol at t+1
 
+        With optional neighbor_pattern for context-dependent rules:
+        ∀t,i: state[i] == trigger_symbol AND neighbor_config(i) == pattern at t
+              → state[i] result_op result_symbol at t+1
+
+        With optional required_parity for index-parity-dependent rules:
+        ∀t,i: state[i] == trigger_symbol AND i % 2 == required_parity at t
+              → state[i] result_op result_symbol at t+1
+
         Example: "Each X cell resolves in one step"
         - trigger_symbol='X', result_op='!=', result_symbol='X'
+
+        Example: "Empty cells with >.< neighborhood become X"
+        - trigger_symbol='.', neighbor_pattern='>.<', result_op='==', result_symbol='X'
+
+        Example: "Right-movers at even indices become left-movers"
+        - trigger_symbol='>', required_parity=0, result_op='==', result_symbol='<'
         """
-        if law.trigger_symbol is None:
+        # Try to infer missing fields from claim text
+        trigger, result_op, result_symbol, neighbor_pattern = self._infer_local_transition_fields(law)
+
+        if trigger is None:
             raise CompilationError("Local_transition requires 'trigger_symbol' field")
 
-        if law.result_op is None:
+        if result_op is None:
             raise CompilationError("Local_transition requires 'result_op' field")
 
-        if law.result_symbol is None:
+        if result_symbol is None:
             raise CompilationError("Local_transition requires 'result_symbol' field")
 
         # Validate that result_op is == or !=
-        if law.result_op not in (ComparisonOp.EQ, ComparisonOp.NE):
+        if result_op not in (ComparisonOp.EQ, ComparisonOp.NE):
             raise CompilationError(
-                f"Local_transition result_op must be '==' or '!=', got '{law.result_op.value}'"
+                f"Local_transition result_op must be '==' or '!=', got '{result_op.value}'"
             )
 
+        # Validate neighbor_pattern if provided
+        if neighbor_pattern is not None:
+            if len(neighbor_pattern) != 3:
+                raise CompilationError(
+                    f"neighbor_pattern must be exactly 3 characters, got '{neighbor_pattern}'"
+                )
+            # Accept both physical (.><X) and abstract (_ABK) symbols
+            valid_symbols = set('.><X_ABK')
+            if not all(c in valid_symbols for c in neighbor_pattern):
+                raise CompilationError(
+                    f"neighbor_pattern must contain only valid symbols, got '{neighbor_pattern}'"
+                )
+
+        # Extract and validate required_parity if provided
+        required_parity = law.required_parity
+        if required_parity is not None:
+            if required_parity not in (0, 1):
+                raise CompilationError(
+                    f"required_parity must be 0 (even) or 1 (odd), got {required_parity}"
+                )
+
         return LocalTransitionChecker(
-            trigger_symbol=law.trigger_symbol,
-            result_op=law.result_op,
-            result_symbol=law.result_symbol,
+            trigger_symbol=trigger,
+            result_op=result_op,
+            result_symbol=result_symbol,
+            neighbor_pattern=neighbor_pattern,
+            required_parity=required_parity,
         )
+
+    def _infer_local_transition_fields(
+        self, law: CandidateLaw
+    ) -> tuple[str | None, ComparisonOp | None, str | None, str | None]:
+        """Infer trigger_symbol, result_op, result_symbol, neighbor_pattern from claim text.
+
+        Returns tuple of (trigger_symbol, result_op, result_symbol, neighbor_pattern).
+        Uses law's explicit fields if set, otherwise parses claim text.
+        """
+        import re
+
+        trigger = law.trigger_symbol
+        result_op = law.result_op
+        result_symbol = law.result_symbol
+        neighbor_pattern = law.neighbor_pattern
+
+        # If all required fields are already set, return them
+        if trigger is not None and result_op is not None and result_symbol is not None:
+            return trigger, result_op, result_symbol, neighbor_pattern
+
+        claim = law.claim.lower()
+        # Fix escaped characters that may appear in LLM output
+        claim = claim.replace("\\!", "!")
+
+        # Symbol mapping for common terms
+        symbol_map = {
+            "x": "X",
+            "collision": "X",
+            "empty": ".",
+            "right-mover": ">",
+            "right mover": ">",
+            "rightmover": ">",
+            "left-mover": "<",
+            "left mover": "<",
+            "leftmover": "<",
+        }
+
+        # Try to extract neighbor_pattern from claim text if not set
+        if neighbor_pattern is None:
+            # Look for patterns like "neighbor_config(i)=='>.<'" or "neighborhood '>.<'"
+            # or "with pattern '>.<'" or just quoted 3-char patterns in context
+            pattern_matches = [
+                r"neighbor[_\s]*(?:config|hood)\s*(?:\(i\))?\s*==\s*['\"]([<>.X]{3})['\"]",
+                r"neighborhood\s+['\"]([<>.X]{3})['\"]",
+                r"pattern\s+['\"]([<>.X]{3})['\"]",
+                r"with\s+['\"]([<>.X]{3})['\"]",
+            ]
+            for p in pattern_matches:
+                match = re.search(p, claim, re.IGNORECASE)
+                if match:
+                    neighbor_pattern = match.group(1)
+                    break
+
+        # Pattern: "X cell(s) becomes/resolves/transitions to non-X"
+        # -> trigger='X', result_op='!=', result_symbol='X'
+        patterns = [
+            # "if state[i]=='X' at t, then state[i]!='X' at t+1" or "state[i]=='>' ... state[i]!='.'"
+            # Most common LLM format - look for quoted symbols with operators
+            (r"state\[i\]\s*==\s*['\"]([<>.X])['\"].*?state\[i\]\s*(!=|==)\s*['\"]([<>.X])['\"]", None),
+
+            # "Each '>' cell becomes '.' at its position"
+            (r"each\s+['\"]([<>.X])['\"]?\s*cell\s+becomes?\s+['\"]([<>.X])['\"]", "=="),
+
+            # "Each X cell becomes non-X" or "X cells resolve"
+            (r"(?:each\s+)?(\w+)\s+cell[s]?\s+(?:becomes?|resolves?|transitions?\s+to)\s+non-(\w+)", "!="),
+
+            # "X resolves in one step" or "X disappears"
+            (r"(\w+)\s+(?:resolves?|disappears?|changes?)\s+in\s+(?:one|1|the\s+next)\s+step", "!="),
+
+            # "X at position i becomes Y"
+            (r"(\w+)\s+at\s+(?:position\s+)?i\s+becomes?\s+(\w+)", "=="),
+
+            # "Empty cells stay empty"
+            (r"(\w+)\s+cells?\s+(?:stay|remain)[s]?\s+(\w+)", "=="),
+        ]
+
+        for pattern, default_op in patterns:
+            match = re.search(pattern, claim, re.IGNORECASE)
+            if match:
+                groups = match.groups()
+
+                if len(groups) == 2:
+                    # Patterns with just trigger and result
+                    trigger_str, result_str = groups
+                    inferred_trigger = symbol_map.get(trigger_str.lower(), trigger_str)
+                    inferred_result = symbol_map.get(result_str.lower(), result_str)
+
+                    if trigger is None:
+                        trigger = inferred_trigger
+                    if result_symbol is None:
+                        result_symbol = inferred_result
+                    if result_op is None and default_op:
+                        result_op = ComparisonOp.NE if default_op == "!=" else ComparisonOp.EQ
+
+                elif len(groups) == 3:
+                    # Pattern with explicit operator
+                    trigger_str, op_str, result_str = groups
+                    inferred_trigger = symbol_map.get(trigger_str.lower(), trigger_str)
+                    inferred_result = symbol_map.get(result_str.lower(), result_str)
+
+                    if trigger is None:
+                        trigger = inferred_trigger
+                    if result_symbol is None:
+                        result_symbol = inferred_result
+                    if result_op is None:
+                        result_op = ComparisonOp.NE if "!" in op_str else ComparisonOp.EQ
+
+                break
+
+        # Special case: "X resolves" without explicit result means X becomes non-X
+        if trigger is not None and result_symbol is None:
+            # Common inference: if trigger is X and claim mentions "resolves" or "disappears"
+            if any(word in claim for word in ["resolve", "disappear", "change"]):
+                result_symbol = trigger
+                if result_op is None:
+                    result_op = ComparisonOp.NE
+
+        return trigger, result_op, result_symbol, neighbor_pattern
 
     def _parse_implication_claim(
         self, law: CandidateLaw

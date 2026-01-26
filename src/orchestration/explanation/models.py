@@ -278,6 +278,7 @@ class ExplanationBatch:
     prompt_hash: str
     runtime_ms: int
     warnings: list[str] = field(default_factory=list)
+    research_log: str | None = None  # LLM's mechanistic notebook for continuity
 
     @property
     def count(self) -> int:

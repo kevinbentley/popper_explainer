@@ -45,17 +45,20 @@ class HarnessConfig:
     #   - precondition_breaking: tests laws with narrow preconditions (e.g., CollisionCells==0)
     #   - multiplicity_crowding: tests many-to-one collisions (>>.<<)
     #   - periodic_boundary_stress: tests wrap-around at N-1 to 0 boundary
+    #   - antecedent_targeting: generates states where implication antecedents are TRUE
     generator_weights: dict[str, float] = field(default_factory=lambda: {
-        "random_density_sweep": 0.22,
-        "constrained_pair_interactions": 0.14,
+        "random_density_sweep": 0.18,
+        "constrained_pair_interactions": 0.12,
         "edge_wrapping_cases": 0.10,
         "symmetry_metamorphic_suite": 0.12,
         "pathological_cases": 0.08,  # Uniform grids, alternating patterns, edge cases
-        "extreme_states": 0.08,  # Full collision grids, max density states
+        "extreme_states": 0.06,  # Full collision grids, max density states
         # Adversarial generators for breaking narrow laws
         "precondition_breaking": 0.08,  # Test with preconditions violated
         "multiplicity_crowding": 0.08,  # Many-to-one collision scenarios
-        "periodic_boundary_stress": 0.10,  # Boundary wrapping edge cases
+        "periodic_boundary_stress": 0.08,  # Boundary wrapping edge cases
+        # Antecedent targeting for low-power implication laws
+        "antecedent_targeting": 0.10,  # States where antecedents are TRUE
     })
 
     def content_hash(self) -> str:

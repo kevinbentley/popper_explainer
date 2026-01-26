@@ -6,7 +6,7 @@ from typing import Literal
 
 
 class Symbol(str, Enum):
-    """Valid cell symbols in the universe.
+    """Valid cell symbols in the universe (physical representation).
 
     . = empty cell
     > = right-moving particle
@@ -20,12 +20,34 @@ class Symbol(str, Enum):
     COLLISION = "X"
 
 
+class AbstractSymbol(str, Enum):
+    """Abstract symbols used in LLM prompts to prevent physics inference.
+
+    The LLM sees these neutral symbols instead of physical ones:
+    _ = Background (maps to .)
+    A = Chiral-1 (maps to >)
+    B = Chiral-2 (maps to <)
+    K = Kinetic (maps to X)
+    """
+
+    BACKGROUND = "_"
+    CHIRAL_1 = "A"
+    CHIRAL_2 = "B"
+    KINETIC = "K"
+
+
 # Type aliases
 State = str  # A string of length N containing only valid symbols
 Trajectory = list[State]  # States from t=0 to t=T
 
-# Valid symbol characters
-VALID_SYMBOLS: frozenset[str] = frozenset(s.value for s in Symbol)
+# Valid symbol characters (physical only - for simulator)
+PHYSICAL_SYMBOLS: frozenset[str] = frozenset(s.value for s in Symbol)
+
+# Abstract symbols (for LLM interface)
+ABSTRACT_SYMBOLS: frozenset[str] = frozenset(s.value for s in AbstractSymbol)
+
+# All valid symbols (both physical and abstract - for expression parsing)
+VALID_SYMBOLS: frozenset[str] = PHYSICAL_SYMBOLS | ABSTRACT_SYMBOLS
 
 
 @dataclass(frozen=True)

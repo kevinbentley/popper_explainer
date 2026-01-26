@@ -150,10 +150,20 @@ class CandidateLaw(BaseModel):
     )
 
     # Local transition template fields
-    # Express: for each position i, if state[i]==trigger_symbol at t,
+    # Express: for each position i, if state[i]==trigger_symbol at t
+    # (and optionally neighbor_config(i)==neighbor_pattern),
+    # (and optionally i % 2 == required_parity),
     # then state[i] result_op result_symbol at t+1
     trigger_symbol: str | None = Field(
         default=None, description="Symbol that triggers the local rule (for local_transition)"
+    )
+    neighbor_pattern: str | None = Field(
+        default=None,
+        description="3-character neighborhood pattern [left,center,right] that must match for trigger (e.g., '>.<')"
+    )
+    required_parity: int | None = Field(
+        default=None,
+        description="Index parity filter (0=even, 1=odd). If set, rule only applies at indices where i % 2 == required_parity"
     )
     result_op: ComparisonOp | None = Field(
         default=None, description="Comparison operator for result (== or !=)"
@@ -207,6 +217,7 @@ class CandidateLaw(BaseModel):
             "bound_op": self.bound_op.value if self.bound_op else None,
             # Local transition fields
             "trigger_symbol": self.trigger_symbol,
+            "neighbor_pattern": self.neighbor_pattern,
             "result_op": self.result_op.value if self.result_op else None,
             "result_symbol": self.result_symbol,
         }

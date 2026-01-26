@@ -165,6 +165,239 @@ def rightmost(state: State, symbol: str) -> int:
     return pos
 
 
+def cell_at(state: State, index: int) -> str:
+    """Return the symbol at a specific grid position (LOCAL PROBE).
+
+    This observable provides a microscope-like probe for tracking the
+    lifecycle of individual cells across timesteps. The AI can observe
+    what happens at each position without the harness revealing WHY
+    the transition occurred.
+
+    INTEGRITY NOTE: This is an observational tool only. It tells the AI
+    what symbol is at a position, not what caused it to be there. The AI
+    must still derive the transition rules from observed patterns.
+
+    Args:
+        state: State string
+        index: 0-indexed position (will wrap with periodic boundary: index % N)
+
+    Returns:
+        The symbol at the wrapped position ('.', '>', '<', or 'X')
+
+    Example:
+        >>> cell_at(">..<", 0)
+        '>'
+        >>> cell_at(">..<", 4)  # wraps to position 0
+        '>'
+        >>> cell_at(">..<", -1)  # wraps to position 3
+        '<'
+    """
+    n = len(state)
+    if n == 0:
+        raise ValueError("Cannot query cell_at on empty state")
+    return state[index % n]
+
+
+def cell_at_numeric(state: State, index: int) -> int:
+    """Return a numeric code for the symbol at a grid position.
+
+    This is a numeric version of cell_at for use in expressions.
+    Symbol codes:
+        '.' -> 0 (empty)
+        '>' -> 1 (right-mover)
+        '<' -> 2 (left-mover)
+        'X' -> 3 (collision)
+
+    Args:
+        state: State string
+        index: 0-indexed position (wraps with periodic boundary)
+
+    Returns:
+        Numeric code (0, 1, 2, or 3)
+    """
+    symbol = cell_at(state, index)
+    return {'.': 0, '>': 1, '<': 2, 'X': 3}[symbol]
+
+
+# --- Grid-Phase (Parity) Observables ---
+# These enable the AI to discover if interactions depend on index parity (i % 2)
+
+
+def index_parity(index: int) -> int:
+    """Return the parity of an index: 0 for even, 1 for odd.
+
+    This is the fundamental instrument for detecting grid-phase dependence.
+    If the AI discovers that certain patterns only hold at even OR odd positions,
+    it reveals a checkerboard-like structure in the dynamics.
+
+    Args:
+        index: The grid position
+
+    Returns:
+        0 if index is even, 1 if index is odd
+    """
+    return index % 2
+
+
+def count_at_parity(state: State, symbol: str, parity: int) -> int:
+    """Count occurrences of a symbol at positions with specific parity.
+
+    This enables discovering phase-dependent conservation laws, e.g.:
+    - "count_at_parity('>', 0) is conserved" (right-movers at even indices)
+    - "count_at_parity('>', 1) is conserved" (right-movers at odd indices)
+
+    Args:
+        state: State string
+        symbol: Symbol to count (one of . > < X)
+        parity: 0 for even indices, 1 for odd indices
+
+    Returns:
+        Count of symbol at positions where index % 2 == parity
+
+    Raises:
+        ValueError: If symbol is invalid or parity is not 0 or 1
+    """
+    if symbol not in VALID_SYMBOLS:
+        raise ValueError(f"Invalid symbol '{symbol}'. Valid symbols: {sorted(VALID_SYMBOLS)}")
+    if parity not in (0, 1):
+        raise ValueError(f"Parity must be 0 (even) or 1 (odd), got {parity}")
+
+    count = 0
+    for i, c in enumerate(state):
+        if c == symbol and i % 2 == parity:
+            count += 1
+    return count
+
+
+def count_even(state: State, symbol: str) -> int:
+    """Count occurrences of a symbol at even indices.
+
+    Convenience function equivalent to count_at_parity(state, symbol, 0).
+
+    Args:
+        state: State string
+        symbol: Symbol to count
+
+    Returns:
+        Count of symbol at positions 0, 2, 4, ...
+    """
+    return count_at_parity(state, symbol, 0)
+
+
+def count_odd(state: State, symbol: str) -> int:
+    """Count occurrences of a symbol at odd indices.
+
+    Convenience function equivalent to count_at_parity(state, symbol, 1).
+
+    Args:
+        state: State string
+        symbol: Symbol to count
+
+    Returns:
+        Count of symbol at positions 1, 3, 5, ...
+    """
+    return count_at_parity(state, symbol, 1)
+
+
+# --- Neighborhood Window Observables ---
+# These enable the AI to observe local context without being told what it means
+
+
+def neighbor_config(state: State, index: int) -> str:
+    """Return the 3-cell neighborhood window centered on index i.
+
+    This is the "multi-lens microscope" that reveals local structure.
+    Returns the pattern [cell(i-1), cell(i), cell(i+1)] as a 3-character string.
+
+    INTEGRITY NOTE: This returns raw observational data. The AI is NOT told
+    what patterns like ">.<" or ".X." mean - it must discover the transition
+    rules by correlating neighborhoods at time t with cell values at t+1.
+
+    Args:
+        state: State string
+        index: Center cell index (wraps with periodic boundaries)
+
+    Returns:
+        3-character string representing [left_neighbor, center, right_neighbor]
+
+    Examples:
+        >>> neighbor_config(">..<X", 2)  # center is '.', neighbors are '.' and '<'
+        '..<'
+        >>> neighbor_config(">..<X", 0)  # wraps: left neighbor is 'X' (index -1 = 4)
+        'X>.'
+    """
+    n = len(state)
+    if n == 0:
+        raise ValueError("Cannot get neighbor_config on empty state")
+
+    left = state[(index - 1) % n]
+    center = state[index % n]
+    right = state[(index + 1) % n]
+    return f"{left}{center}{right}"
+
+
+def count_pattern(state: State, pattern: str) -> int:
+    """Count how many cells have the specified 3-cell neighborhood pattern.
+
+    This lets the AI discover global counts of local configurations, enabling
+    laws like "the count of '>.<' patterns equals something at t+1".
+
+    CRITICAL FOR DISCOVERY: The AI can use this to:
+    1. Correlate patterns with future events (e.g., ">.<" → collision)
+    2. Find conservation laws involving local structure
+    3. Debug why certain transitions happen
+
+    Args:
+        state: State string
+        pattern: Exactly 3-character pattern to match (e.g., ">.<", ".X.", ">.>")
+
+    Returns:
+        Count of positions where neighbor_config(i) == pattern
+
+    Raises:
+        ValueError: If pattern is not exactly 3 characters or contains invalid symbols
+
+    Examples:
+        >>> count_pattern(">..<", ">..") # How many cells have this neighborhood?
+        1  # Only position 1 has neighborhood ">..": [>, ., .]
+    """
+    if len(pattern) != 3:
+        raise ValueError(f"Pattern must be exactly 3 characters, got {len(pattern)}: '{pattern}'")
+
+    for c in pattern:
+        if c not in VALID_SYMBOLS:
+            raise ValueError(f"Invalid symbol '{c}' in pattern. Valid: {sorted(VALID_SYMBOLS)}")
+
+    n = len(state)
+    if n == 0:
+        return 0
+
+    count = 0
+    for i in range(n):
+        if neighbor_config(state, i) == pattern:
+            count += 1
+    return count
+
+
+def neighbor_symbol(state: State, index: int, offset: int) -> int:
+    """Return numeric code for the symbol at position (index + offset).
+
+    This is a building block for neighborhood queries in expressions.
+    Combined with cell_at_numeric, enables expressing local conditions.
+
+    Symbol codes: '.' -> 0, '>' -> 1, '<' -> 2, 'X' -> 3
+
+    Args:
+        state: State string
+        index: Base position
+        offset: Offset from base position (-1 for left, 0 for center, +1 for right)
+
+    Returns:
+        Numeric code for symbol at (index + offset) % len(state)
+    """
+    return cell_at_numeric(state, index + offset)
+
+
 def max_gap(state: State, symbol: str = ".") -> int:
     """Find the length of the longest contiguous run of a symbol.
 
@@ -313,6 +546,7 @@ def spread(state: State, symbol: str) -> int:
 
 
 # Registry of primitive observables for capability checking
+# NOTE: transition_indicator is the public name; incoming_collisions is kept for backwards compat
 PRIMITIVE_OBSERVABLES: dict[str, str] = {
     "count": "count(symbol) - count occurrences of a symbol",
     "grid_length": "grid_length - length of the state",
@@ -321,9 +555,21 @@ PRIMITIVE_OBSERVABLES: dict[str, str] = {
     "max_gap": "max_gap(symbol) - longest contiguous run of symbol",
     "adjacent_pairs": "adjacent_pairs(sym1, sym2) - count of sym1 followed by sym2",
     "gap_pairs": "gap_pairs(sym1, sym2, gap) - count of sym1 followed by sym2 with gap cells between",
-    "incoming_collisions": "incoming_collisions - count of cells that will have collision at t+1",
+    "transition_indicator": "transition_indicator - a count related to future state transitions",
     "spread": "spread(symbol) - rightmost - leftmost position",
+    "cell_at": "cell_at(index) - symbol at position (wraps with periodic boundary)",
+    "count_at_parity": "count_at_parity(symbol, parity) - count symbol at even (0) or odd (1) indices",
+    "count_even": "count_even(symbol) - count symbol at even indices (0, 2, 4, ...)",
+    "count_odd": "count_odd(symbol) - count symbol at odd indices (1, 3, 5, ...)",
+    "neighbor_config": "neighbor_config(index) - 3-char neighborhood [left, center, right] at index",
+    "count_pattern": "count_pattern(pattern) - count cells with specific 3-cell neighborhood pattern",
 }
+
+
+# Alias for backwards compatibility
+def transition_indicator(state: State) -> int:
+    """Alias for incoming_collisions - the public API name."""
+    return incoming_collisions(state)
 
 
 def evaluate_observable(name: str, state: State, **kwargs) -> int:
@@ -350,6 +596,13 @@ def evaluate_observable(name: str, state: State, **kwargs) -> int:
 
     elif name == "grid_length":
         return grid_length(state)
+
+    elif name == "cell_at":
+        index = kwargs.get("index")
+        if index is None:
+            raise ValueError("cell_at() requires an 'index' argument")
+        # Return numeric code: . -> 0, > -> 1, < -> 2, X -> 3
+        return cell_at_numeric(state, int(index))
 
     else:
         raise ValueError(f"Unknown observable: {name}")
@@ -483,16 +736,15 @@ CANONICAL_OBSERVABLES: dict[str, CanonicalObservable] = {
         notes="Conserved only if no collisions occur",
     ),
 
-    # === COLLISION PREDICTION OBSERVABLES ===
-    "IncomingCollisions": CanonicalObservable(
-        name="IncomingCollisions",
-        expression="incoming_collisions",
-        description="Count of cells that will have collision at t+1",
+    # === TRANSITION PREDICTION OBSERVABLES ===
+    # NOTE: Internal name is IncomingCollisions; public API is TransitionIndicator
+    "TransitionIndicator": CanonicalObservable(
+        name="TransitionIndicator",
+        expression="transition_indicator",
+        description="Count related to future state transitions",
         conservation=ConservationStatus.NOT_CONSERVED,
-        quantity_type="collision_count",
-        notes="THE canonical collision predictor. Cell j collides if "
-              "state[(j-1)%L] in {>,X} AND state[(j+1)%L] in {<,X}. "
-              "X contributes both a right-mover and left-mover when resolving.",
+        quantity_type="transition_count",
+        notes="Predicts certain state changes. Semantics to be discovered empirically.",
     ),
     "AdjacentRL": CanonicalObservable(
         name="AdjacentRL",

@@ -23,6 +23,7 @@ class TheoremParseResult:
     theorems: list[Theorem]
     rejections: list[tuple[dict[str, Any], str]]  # (raw_data, rejection_reason)
     warnings: list[str] = field(default_factory=list)
+    research_log: str | None = None  # LLM's theoretical notebook
 
 
 class TheoremParser:
@@ -35,15 +36,20 @@ class TheoremParser:
     def parse(self, response: str) -> TheoremParseResult:
         """Parse an LLM response into theorems.
 
+        Handles two formats:
+        1. New format: {"research_log": "...", "theorems": [...]}
+        2. Legacy format: [...] (just a list of theorems)
+
         Args:
             response: Raw LLM response text
 
         Returns:
-            TheoremParseResult with parsed theorems and rejections
+            TheoremParseResult with parsed theorems, rejections, and research_log
         """
         theorems: list[Theorem] = []
         rejections: list[tuple[dict[str, Any], str]] = []
         warnings: list[str] = []
+        research_log: str | None = None
 
         # Extract JSON from response
         try:
@@ -56,9 +62,35 @@ class TheoremParser:
                 warnings=warnings,
             )
 
-        # Expect a list of theorem objects
-        if not isinstance(data, list):
-            warnings.append(f"Expected JSON array, got {type(data).__name__}")
+        # Handle new format: object with research_log and theorems
+        theorems_data: list[Any] = []
+        if isinstance(data, dict):
+            # Extract research_log if present
+            if "research_log" in data:
+                log_value = data["research_log"]
+                if isinstance(log_value, str):
+                    research_log = log_value
+                else:
+                    warnings.append("research_log should be a string")
+
+            # Extract theorems array
+            if "theorems" in data:
+                theorems_list = data["theorems"]
+                if isinstance(theorems_list, list):
+                    theorems_data = theorems_list
+                else:
+                    warnings.append("theorems should be a list")
+            else:
+                # Maybe legacy format with theorem fields at top level
+                if "name" in data or "claim" in data:
+                    theorems_data = [data]
+                else:
+                    warnings.append("Response object missing 'theorems' field")
+        elif isinstance(data, list):
+            # Legacy format: just a list of theorems
+            theorems_data = data
+        else:
+            warnings.append(f"Expected JSON object or array, got {type(data).__name__}")
             return TheoremParseResult(
                 theorems=[],
                 rejections=[],
@@ -66,7 +98,7 @@ class TheoremParser:
             )
 
         # Parse each theorem
-        for i, item in enumerate(data):
+        for i, item in enumerate(theorems_data):
             if not isinstance(item, dict):
                 rejections.append(
                     ({"index": i, "value": item}, f"Item {i}: not a dict")
@@ -83,30 +115,46 @@ class TheoremParser:
             theorems=theorems,
             rejections=rejections,
             warnings=warnings,
+            research_log=research_log,
         )
 
     def _extract_json(self, text: str) -> Any:
         """Extract JSON from response text.
 
         Handles cases where JSON is wrapped in markdown code blocks.
+        Supports both object format (new) and array format (legacy).
         """
         text = text.strip()
 
-        # Try to find JSON array in code blocks
+        # Try to find JSON in code blocks (object or array)
         code_block_match = re.search(
-            r"```(?:json)?\s*(\[[\s\S]*?\])\s*```",
+            r"```(?:json)?\s*(\{[\s\S]*\}|\[[\s\S]*?\])\s*```",
             text,
             re.DOTALL,
         )
         if code_block_match:
             text = code_block_match.group(1)
 
-        # Try to find bare JSON array
-        if not text.startswith("["):
-            # Look for array start
+        # Try to find bare JSON object or array
+        if not text.startswith("{") and not text.startswith("["):
+            # Look for object start first (new format)
+            obj_start = text.find("{")
             array_start = text.find("[")
-            if array_start != -1:
-                # Find matching end
+
+            # Prefer object format if it comes first or array not found
+            if obj_start != -1 and (array_start == -1 or obj_start < array_start):
+                # Find matching end brace
+                depth = 0
+                for i, char in enumerate(text[obj_start:], obj_start):
+                    if char == "{":
+                        depth += 1
+                    elif char == "}":
+                        depth -= 1
+                        if depth == 0:
+                            text = text[obj_start : i + 1]
+                            break
+            elif array_start != -1:
+                # Find matching end bracket
                 depth = 0
                 for i, char in enumerate(text[array_start:], array_start):
                     if char == "[":

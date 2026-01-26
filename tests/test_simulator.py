@@ -20,11 +20,18 @@ from src.universe.observables import (
 
 class TestTypes:
     def test_valid_symbols(self):
+        # Physical symbols
         assert "." in VALID_SYMBOLS
         assert ">" in VALID_SYMBOLS
         assert "<" in VALID_SYMBOLS
         assert "X" in VALID_SYMBOLS
-        assert len(VALID_SYMBOLS) == 4
+        # Abstract symbols (for LLM interface)
+        assert "_" in VALID_SYMBOLS
+        assert "A" in VALID_SYMBOLS
+        assert "B" in VALID_SYMBOLS
+        assert "K" in VALID_SYMBOLS
+        # 4 physical + 4 abstract
+        assert len(VALID_SYMBOLS) == 8
 
     def test_config_valid(self):
         config = Config(grid_length=10)

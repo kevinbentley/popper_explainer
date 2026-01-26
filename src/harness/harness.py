@@ -13,6 +13,12 @@ import logging
 import time
 from typing import Any
 
+from src.harness.integrity import (
+    IntegrityChecker,
+    InvariantUnmasker,
+    IntegrityViolation,
+)
+
 logger = logging.getLogger(__name__)
 
 from src.claims.compiler import CompilationError
@@ -57,6 +63,8 @@ class Harness:
             budget=self.config.adversarial_budget,
             max_runtime_ms=self.config.max_runtime_ms_per_law // 2,
         )
+        self._integrity_checker = IntegrityChecker()
+        self._unmasker = InvariantUnmasker(self._evaluator)
 
     def evaluate(self, law: CandidateLaw) -> LawVerdict:
         """Evaluate a law and return a verdict.
@@ -193,6 +201,54 @@ class Harness:
                     f"Adversarial search: {adversarial_result.cases_tried} mutations tried, "
                     f"no counterexample found"
                 )
+
+        # Run integrity checks on the law
+        integrity_violations = self._integrity_checker.check_law(law)
+        if integrity_violations:
+            verdict.notes = verdict.notes or []
+            for violation in integrity_violations:
+                if violation.severity == "error":
+                    verdict.notes.append(f"INTEGRITY ERROR: {violation.message}")
+                elif violation.severity == "warning":
+                    verdict.notes.append(f"INTEGRITY WARNING: {violation.message}")
+                else:
+                    verdict.notes.append(f"INTEGRITY INFO: {violation.message}")
+                if violation.suggested_fix:
+                    verdict.notes.append(f"  -> Suggested: {violation.suggested_fix}")
+
+        # INVARIANT UNMASKING: For PASS verdicts with preconditions, test without them
+        if verdict.status == "PASS" and self._unmasker.should_unmask(law):
+            unmask_result = self._unmasker.unmask(law, time_horizon)
+            verdict.notes = verdict.notes or []
+
+            if unmask_result.core_claim_passed:
+                # The law could be universal - flag it!
+                verdict.notes.append(
+                    f"INVARIANT UNMASKING: {unmask_result.recommendation}"
+                )
+                verdict.notes.append(
+                    f"  Stripped preconditions: {', '.join(unmask_result.stripped_preconditions)}"
+                )
+                # Add metadata for downstream processing
+                if not hasattr(verdict, "metadata"):
+                    verdict.metadata = {}
+                verdict.metadata["narrowly_defined"] = True
+                verdict.metadata["unmasking_result"] = {
+                    "core_claim_passed": True,
+                    "stripped_preconditions": unmask_result.stripped_preconditions,
+                    "recommendation": unmask_result.recommendation,
+                }
+            else:
+                # Preconditions are justified
+                verdict.notes.append(
+                    f"INVARIANT UNMASKING: {unmask_result.recommendation}"
+                )
+                if unmask_result.counterexample:
+                    verdict.notes.append(
+                        f"  Counterexample without preconditions: "
+                        f"state='{unmask_result.counterexample['initial_state']}' "
+                        f"t_fail={unmask_result.counterexample['t_fail']}"
+                    )
 
         # Persist to database if repo available
         if self.repo:

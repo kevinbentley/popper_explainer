@@ -509,12 +509,20 @@ class Repository:
     # --- Summary queries ---
 
     def get_evaluation_summary(self) -> dict[str, int]:
-        """Get counts of evaluations by status."""
+        """Get counts of unique laws by their latest evaluation status.
+
+        Each law is counted only once, based on its most recent evaluation.
+        This avoids double-counting laws that have been evaluated multiple times
+        (e.g., baseline test and escalation).
+        """
         cursor = self.conn.cursor()
         cursor.execute(
             """
             SELECT status, COUNT(*) as count
-            FROM evaluations
+            FROM evaluations e
+            WHERE e.id = (
+                SELECT MAX(e2.id) FROM evaluations e2 WHERE e2.law_id = e.law_id
+            )
             GROUP BY status
             """
         )
@@ -3033,11 +3041,11 @@ class Repository:
             """
             INSERT INTO llm_transcripts (
                 run_id, iteration_id, phase, component, model_name,
-                system_instruction, prompt, raw_response, prompt_hash,
+                system_instruction, prompt, raw_response, research_log, prompt_hash,
                 prompt_tokens, output_tokens, thinking_tokens, total_tokens,
                 duration_ms, success, error_message
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.run_id,
@@ -3048,6 +3056,7 @@ class Repository:
                 record.system_instruction,
                 record.prompt,
                 record.raw_response,
+                record.research_log,
                 record.prompt_hash,
                 record.prompt_tokens,
                 record.output_tokens,
@@ -3204,6 +3213,13 @@ class Repository:
         }
 
     def _row_to_llm_transcript(self, row: sqlite3.Row) -> LLMTranscriptRecord:
+        # Handle research_log column which may not exist in older databases
+        research_log = None
+        try:
+            research_log = row["research_log"]
+        except (KeyError, IndexError):
+            pass
+
         return LLMTranscriptRecord(
             id=row["id"],
             run_id=row["run_id"],
@@ -3214,6 +3230,7 @@ class Repository:
             system_instruction=row["system_instruction"],
             prompt=row["prompt"],
             raw_response=row["raw_response"],
+            research_log=research_log,
             prompt_hash=row["prompt_hash"],
             prompt_tokens=row["prompt_tokens"],
             output_tokens=row["output_tokens"],

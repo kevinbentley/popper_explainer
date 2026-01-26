@@ -17,6 +17,7 @@ class DiscoveryMemorySnapshot:
         unknown_laws: Laws with unknown status and reason codes
         counterexamples: Gallery of counterexamples
         capabilities: Current tester capabilities
+        previous_research_log: LLM's research notes from the previous iteration
     """
 
     accepted_laws: list[dict[str, Any]] = field(default_factory=list)
@@ -24,6 +25,7 @@ class DiscoveryMemorySnapshot:
     unknown_laws: list[dict[str, Any]] = field(default_factory=list)
     counterexamples: list[dict[str, Any]] = field(default_factory=list)
     capabilities: dict[str, Any] = field(default_factory=dict)
+    previous_research_log: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -33,6 +35,7 @@ class DiscoveryMemorySnapshot:
             "unknown_laws": self.unknown_laws,
             "counterexamples": self.counterexamples,
             "capabilities": self.capabilities,
+            "previous_research_log": self.previous_research_log,
         }
 
     @classmethod
@@ -44,6 +47,7 @@ class DiscoveryMemorySnapshot:
             unknown_laws=data.get("unknown_laws", []),
             counterexamples=data.get("counterexamples", []),
             capabilities=data.get("capabilities", {}),
+            previous_research_log=data.get("previous_research_log"),
         )
 
 

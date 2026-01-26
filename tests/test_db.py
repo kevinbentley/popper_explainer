@@ -215,9 +215,16 @@ class TestAuditLog:
 
 class TestSummaryQueries:
     def test_evaluation_summary(self, repo):
+        """Test that evaluation summary counts unique laws by latest status.
+
+        This test verifies that:
+        - Each law is counted only once (by its latest evaluation status)
+        - Multiple evaluations of the same law don't cause double-counting
+        """
         repo.insert_law(LawRecord("sum_law1", "h1", "invariant", "{}"))
         repo.insert_law(LawRecord("sum_law2", "h2", "invariant", "{}"))
 
+        # sum_law1 evaluated twice (both PASS) - should count once
         repo.insert_evaluation(EvaluationRecord(
             "sum_law1", "h1", "PASS", "c1", "s1", 100, 90
         ))
@@ -229,7 +236,26 @@ class TestSummaryQueries:
         ))
 
         summary = repo.get_evaluation_summary()
-        assert summary.get("PASS", 0) == 2
+        # 2 unique laws: sum_law1 (PASS), sum_law2 (FAIL)
+        assert summary.get("PASS", 0) == 1
+        assert summary.get("FAIL", 0) == 1
+
+    def test_evaluation_summary_status_change(self, repo):
+        """Test that latest status is used when a law's status changes."""
+        repo.insert_law(LawRecord("flip_law", "h1", "invariant", "{}"))
+
+        # First evaluation: PASS
+        repo.insert_evaluation(EvaluationRecord(
+            "flip_law", "h1", "PASS", "c1", "s1", 100, 90
+        ))
+        # Second evaluation: FAIL (e.g., from escalation)
+        repo.insert_evaluation(EvaluationRecord(
+            "flip_law", "h1", "FAIL", "c2", "s1", 200, 150
+        ))
+
+        summary = repo.get_evaluation_summary()
+        # Should count the LATEST status (FAIL), not PASS
+        assert summary.get("PASS", 0) == 0
         assert summary.get("FAIL", 0) == 1
 
     def test_get_laws_by_status(self, repo):

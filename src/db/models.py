@@ -354,6 +354,7 @@ class LLMTranscriptRecord:
         model_name: LLM model used
         prompt: The prompt text sent to the LLM
         raw_response: The raw response from the LLM
+        research_log: Extracted research_log from LLM response (for law_proposer)
         success: Whether the call succeeded
         run_id: Optional orchestration run ID
         iteration_id: Optional iteration index
@@ -373,6 +374,7 @@ class LLMTranscriptRecord:
     prompt: str
     raw_response: str
     success: bool = True
+    research_log: str | None = None
     run_id: str | None = None
     iteration_id: int | None = None
     phase: str | None = None

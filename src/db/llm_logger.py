@@ -102,6 +102,7 @@ class LLMLogger:
         response: str,
         success: bool = True,
         system_instruction: str | None = None,
+        research_log: str | None = None,
         prompt_tokens: int | None = None,
         output_tokens: int | None = None,
         thinking_tokens: int = 0,
@@ -115,6 +116,7 @@ class LLMLogger:
             response: The response received (or empty if failed)
             success: Whether the call succeeded
             system_instruction: Optional system instruction
+            research_log: Extracted research_log from law_proposer response
             prompt_tokens: Estimated prompt tokens
             output_tokens: Estimated output tokens
             thinking_tokens: Thinking tokens (for extended thinking models)
@@ -140,6 +142,7 @@ class LLMLogger:
             model_name=self.model_name,
             prompt=prompt,
             raw_response=response,
+            research_log=research_log,
             success=success,
             run_id=self.context.run_id,
             iteration_id=self.context.iteration_id,

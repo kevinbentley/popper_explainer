@@ -24,6 +24,7 @@ from src.orchestration.explanation.models import (
     MechanismType,
     OpenQuestion,
 )
+from src.proposer.scrambler import SymbolScrambler, get_default_scrambler
 
 if TYPE_CHECKING:
     from src.db.llm_logger import LLMLogger
@@ -49,32 +50,74 @@ class ExplanationGeneratorConfig:
     verbose: bool = False
 
 
+# System instruction for explanation generation
+EXPLANATION_SYSTEM_INSTRUCTION = """You are a Popperian scientist in the EXPLANATION PHASE - the final phase of discovery.
+
+Your mission: Build a complete mechanistic model that can PREDICT the next state of the universe.
+
+=== YOUR SCIENTIFIC IDENTITY ===
+
+You have progressed through three phases of Popperian discovery:
+1. LAW DISCOVERY: Tested empirical laws through falsification
+2. THEOREM GENERATION: Synthesized laws into theoretical structure
+3. EXPLANATION (you are here): Build predictive mechanistic models
+
+Your explanation must be FALSIFIABLE. If your predictions fail, you may need to:
+- Request better theorems (backtrack to theorem phase)
+- Request new laws or observables (backtrack to discovery phase)
+
+=== KEY PRINCIPLES ===
+
+1. MECHANISMS, NOT JUST DESCRIPTIONS: Explain HOW and WHY, not just WHAT
+2. PREDICTIVE POWER: Your model should predict the next state from the current state
+3. FALSIFIABLE: State clearly what would prove your explanation wrong
+4. COMPLETE: Account for all observed phenomena (state transitions, interactions, conservation)
+5. BACKTRACK IF NEEDED: If theorems are insufficient, request what you need
+
+Your research_log maintains continuity - record your evolving mechanistic understanding."""
+
+
 # Prompt template for explanation generation
-EXPLANATION_PROMPT_TEMPLATE = '''You are a physicist analyzing a 1D particle simulation.
+EXPLANATION_PROMPT_TEMPLATE = '''You are a Popperian scientist building a complete mechanistic explanation.
 
-Given the following validated theorems about the Kinetic Grid Universe, synthesize a mechanistic explanation.
+=== YOUR MISSION ===
 
-## Universe Description
-The Kinetic Grid Universe is a 1D grid with periodic boundaries containing:
-- Empty cells (.)
-- Right-moving particles (>)
-- Left-moving particles (<)
-- Collisions (X) - formed when > and < occupy the same cell
+Synthesize the validated theorems into a PREDICTIVE MECHANISM that can:
+1. Explain HOW the universe evolves step by step
+2. PREDICT what the next state will be given any current state
+3. Be FALSIFIED if predictions fail
 
-## Validated Theorems
+=== UNIVERSE DESCRIPTION ===
+
+The universe is a 1D grid with periodic boundaries containing 4 abstract symbols:
+- _ (Background)
+- A (Chiral-1)
+- B (Chiral-2)
+- K (Kinetic)
+
+The symbol names tell you NOTHING about their physics - discover through the theorems below.
+
+=== VALIDATED THEOREMS ===
+
 {theorems_text}
 
-## Task
+{previous_research_log_section}
+
+=== YOUR TASK ===
+
 Generate a mechanistic explanation that:
 1. Explains HOW the universe evolves (movement rules, collision rules)
-2. Identifies the fundamental mechanisms
-3. Notes any open questions or limitations
+2. Can PREDICT the next state given any current state
+3. Identifies failure modes - what would prove your mechanism wrong
+4. Notes any open questions requiring more theorems or laws
 
-## Response Format (JSON)
+=== RESPONSE FORMAT (JSON) ===
+
 {{
-    "hypothesis": "A natural language description of the mechanism",
+    "research_log": "Your mechanistic notebook (max 300 words). Record: (1) Your current understanding of the mechanism, (2) What the theorems taught you, (3) What predictions your model makes, (4) What would falsify your explanation, (5) What additional theorems/laws you might need.",
+    "hypothesis": "A natural language description of the complete mechanism",
     "mechanism": {{
-        "description": "Overall mechanism description",
+        "description": "Overall mechanism description - how to predict the next state",
         "rules": [
             {{
                 "rule_id": "rule_1",
@@ -101,6 +144,7 @@ Generate a mechanistic explanation that:
             "source": "theorem|prediction|llm"
         }}
     ],
+    "theorem_requests": ["Optional: specific theorems or laws needed from earlier phases"],
     "confidence": 0.8
 }}
 
@@ -119,6 +163,8 @@ class ExplanationGenerator:
         client: Any,  # LLM client
         config: ExplanationGeneratorConfig | None = None,
         llm_logger: LLMLogger | None = None,
+        system_instruction: str | None = None,
+        scrambler: SymbolScrambler | None = None,
     ):
         """Initialize the generator.
 
@@ -126,10 +172,17 @@ class ExplanationGenerator:
             client: LLM client for generation
             config: Generator configuration
             llm_logger: Optional LLM logger for capturing all LLM interactions
+            system_instruction: Optional custom system instruction
+            scrambler: Symbol scrambler for translating physical symbols
         """
         self.client = client
         self.config = config or ExplanationGeneratorConfig()
         self._llm_logger = llm_logger
+        self.system_instruction = system_instruction or EXPLANATION_SYSTEM_INSTRUCTION
+        self._scrambler = scrambler or get_default_scrambler()
+
+        # Research log for continuity across iterations
+        self._research_log: str | None = None
 
     def generate(
         self,
@@ -145,7 +198,7 @@ class ExplanationGenerator:
             iteration_id: Current iteration index
 
         Returns:
-            ExplanationBatch with generated explanations
+            ExplanationBatch with generated explanations and research_log
         """
         start_time = time.time()
         warnings: list[str] = []
@@ -157,9 +210,13 @@ class ExplanationGenerator:
                 f"minimum is {self.config.min_theorem_support}"
             )
 
-        # Build prompt
+        # Build prompt with previous research log for continuity
         theorems_text = self._format_theorems(theorems)
-        prompt = EXPLANATION_PROMPT_TEMPLATE.format(theorems_text=theorems_text)
+        previous_research_log_section = self._build_previous_research_log_section()
+        prompt = EXPLANATION_PROMPT_TEMPLATE.format(
+            theorems_text=theorems_text,
+            previous_research_log_section=previous_research_log_section,
+        )
         prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:16]
         prompt_tokens = len(prompt) // 4  # Rough estimate
 
@@ -167,16 +224,30 @@ class ExplanationGenerator:
         response = ""
         llm_success = True
         llm_error = None
+        research_log: str | None = None
         llm_start = time.time()
 
         try:
-            response = self.client.generate(
-                prompt,
-                temperature=self.config.temperature,
-            )
-            explanations = self._parse_response(
+            # Check if client supports system_instruction parameter
+            if hasattr(self.client, 'generate') and 'system_instruction' in self.client.generate.__code__.co_varnames:
+                response = self.client.generate(
+                    prompt,
+                    system_instruction=self.system_instruction,
+                    temperature=self.config.temperature,
+                )
+            else:
+                response = self.client.generate(
+                    prompt,
+                    temperature=self.config.temperature,
+                )
+            explanations, research_log = self._parse_response(
                 response, theorems, iteration_id
             )
+
+            # Store research log for next iteration
+            if research_log:
+                self._research_log = research_log
+
         except Exception as e:
             logger.error(f"LLM generation failed: {e}")
             warnings.append(f"LLM error: {str(e)}")
@@ -189,12 +260,14 @@ class ExplanationGenerator:
         finally:
             llm_duration_ms = int((time.time() - llm_start) * 1000)
 
-            # Log LLM call
+            # Log LLM call (after parsing to include research_log)
             if self._llm_logger:
                 self._llm_logger.log_call(
                     prompt=prompt,
                     response=response,
                     success=llm_success,
+                    system_instruction=self.system_instruction,
+                    research_log=research_log,
                     prompt_tokens=prompt_tokens,
                     duration_ms=llm_duration_ms,
                     error_message=llm_error,
@@ -207,6 +280,7 @@ class ExplanationGenerator:
             prompt_hash=prompt_hash,
             runtime_ms=runtime_ms,
             warnings=warnings,
+            research_log=research_log,
         )
 
     def set_llm_logger(self, logger: LLMLogger | None) -> None:
@@ -237,12 +311,64 @@ class ExplanationGenerator:
                 phase=phase,
             )
 
+    def get_research_log(self) -> str | None:
+        """Get the current research log.
+
+        Returns:
+            The LLM's mechanistic notes from the most recent iteration
+        """
+        return self._research_log
+
+    def set_research_log(self, log: str | None) -> None:
+        """Set the research log for the next iteration.
+
+        This can be used to seed the generator with initial context
+        or to restore state from persistence.
+
+        Args:
+            log: Research log content
+        """
+        self._research_log = log
+
+    def clear_research_log(self) -> None:
+        """Clear the research log, starting fresh."""
+        self._research_log = None
+
+    def _build_previous_research_log_section(self) -> str:
+        """Build the previous research log section for continuity."""
+        if not self._research_log:
+            return ""
+
+        return f"""
+=== YOUR PREVIOUS RESEARCH LOG ===
+
+Below are your mechanistic notes from the last iteration. Build on these insights
+rather than starting fresh. Your understanding should deepen over time.
+
+{self._research_log}
+
+=== END OF PREVIOUS LOG ==="""
+
     def _format_theorems(self, theorems: list[Theorem]) -> str:
-        """Format theorems for the prompt."""
+        """Format theorems for the prompt.
+
+        Scrambles any physical symbols in theorem claims to abstract
+        form, since existing theorems may have been generated before
+        scrambling was applied to the theorem pipeline.
+        """
         lines = []
         for i, theorem in enumerate(theorems, 1):
-            lines.append(f"{i}. [{theorem.status.value}] {theorem.name}")
-            lines.append(f"   Claim: {theorem.claim}")
+            # Scramble claim text: translate both quoted and bare symbols
+            claim = self._scrambler.translate_observable_expr(
+                theorem.claim, to_physical=False
+            )
+            # Also translate bare state symbols in prose text
+            claim = self._scrambler.to_abstract(claim)
+
+            name = self._scrambler.to_abstract(theorem.name)
+
+            lines.append(f"{i}. [{theorem.status.value}] {name}")
+            lines.append(f"   Claim: {claim}")
             if theorem.support:
                 law_ids = [s.law_id for s in theorem.support]
                 lines.append(f"   Supporting laws: {', '.join(law_ids)}")
@@ -256,22 +382,34 @@ class ExplanationGenerator:
         response: str,
         theorems: list[Theorem],
         iteration_id: int | None,
-    ) -> list[Explanation]:
-        """Parse LLM response into Explanation objects."""
+    ) -> tuple[list[Explanation], str | None]:
+        """Parse LLM response into Explanation objects.
+
+        Returns:
+            Tuple of (explanations, research_log)
+        """
+        research_log: str | None = None
+
         try:
             # Extract JSON from response
             json_str = self._extract_json(response)
             data = json.loads(json_str)
 
+            # Extract research_log if present
+            if isinstance(data, dict) and "research_log" in data:
+                log_value = data["research_log"]
+                if isinstance(log_value, str):
+                    research_log = log_value
+
             # Build explanation
             explanation = self._build_explanation_from_data(
                 data, theorems, iteration_id
             )
-            return [explanation]
+            return [explanation], research_log
 
         except (json.JSONDecodeError, KeyError, ValueError) as e:
             logger.warning(f"Failed to parse LLM response: {e}")
-            return [self._generate_fallback_explanation(theorems, iteration_id)]
+            return [self._generate_fallback_explanation(theorems, iteration_id)], None
 
     def _extract_json(self, response: str) -> str:
         """Extract JSON from LLM response."""
@@ -360,35 +498,35 @@ class ExplanationGenerator:
         """Generate a rule-based fallback explanation.
 
         This is used when LLM generation fails. It creates
-        a basic mechanistic model based on known universe rules.
+        a basic mechanistic model using abstract symbols only.
         """
         rules = [
             MechanismRule(
-                rule_id="movement_right",
+                rule_id="movement_A",
                 rule_type=MechanismType.MOVEMENT,
-                condition="Cell contains > (right-moving particle)",
-                effect="Particle moves one cell to the right",
+                condition="Cell contains A (Chiral-1)",
+                effect="A moves one cell in its characteristic direction",
                 priority=0,
             ),
             MechanismRule(
-                rule_id="movement_left",
+                rule_id="movement_B",
                 rule_type=MechanismType.MOVEMENT,
-                condition="Cell contains < (left-moving particle)",
-                effect="Particle moves one cell to the left",
+                condition="Cell contains B (Chiral-2)",
+                effect="B moves one cell in its characteristic direction",
                 priority=0,
             ),
             MechanismRule(
-                rule_id="collision_formation",
+                rule_id="kinetic_formation",
                 rule_type=MechanismType.INTERACTION,
-                condition="> and < attempt to occupy the same cell",
-                effect="Collision (X) forms at that cell",
+                condition="A and B attempt to occupy the same cell",
+                effect="K (Kinetic) state forms at that cell",
                 priority=1,
             ),
             MechanismRule(
-                rule_id="collision_resolution",
+                rule_id="kinetic_resolution",
                 rule_type=MechanismType.TRANSFORMATION,
-                condition="Cell contains X (collision)",
-                effect="> exits right, < exits left, cell becomes empty",
+                condition="Cell contains K (Kinetic)",
+                effect="A exits one direction, B exits the other, cell becomes _",
                 priority=2,
             ),
             MechanismRule(
@@ -410,14 +548,14 @@ class ExplanationGenerator:
         mechanism = Mechanism(
             rules=rules,
             description=(
-                "The Kinetic Grid Universe evolves through simultaneous "
-                "particle movement with collision formation and resolution. "
-                "Particles move at speed 1, collisions form when particles "
+                "The universe evolves through simultaneous "
+                "particle movement with K-state formation and resolution. "
+                "Particles move at speed 1, K states form when particles "
                 "meet, and resolve by separating in the next step."
             ),
             assumptions=[
                 "All particles move at unit speed",
-                "Collisions are always between exactly one > and one <",
+                "K states are always between exactly one A and one B",
                 "Grid has periodic boundaries",
             ],
             limitations=[
@@ -430,9 +568,10 @@ class ExplanationGenerator:
             explanation_id=f"exp_fallback_{iteration_id or 0}",
             hypothesis_text=(
                 "The universe consists of particles moving in a 1D grid. "
-                "Right-movers (>) move right, left-movers (<) move left, "
-                "both at speed 1. When they meet, they form a collision (X) "
-                "which resolves in the next step with particles separating."
+                "A particles move in one direction, B particles move in the "
+                "opposite direction, both at speed 1. When they meet, they "
+                "form a K state which resolves in the next step with "
+                "particles separating."
             ),
             mechanism=mechanism,
             supporting_theorems=[t.theorem_id for t in theorems],

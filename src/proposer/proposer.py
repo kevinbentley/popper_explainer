@@ -51,6 +51,7 @@ class ProposalBatch:
         response_tokens: Estimated response token count
         runtime_ms: Time taken
         warnings: Non-fatal issues encountered
+        research_log: LLM's research notes for continuity between iterations
     """
 
     laws: list[CandidateLaw] = field(default_factory=list)
@@ -62,6 +63,7 @@ class ProposalBatch:
     response_tokens: int = 0
     runtime_ms: int = 0
     warnings: list[str] = field(default_factory=list)
+    research_log: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for logging."""
@@ -75,6 +77,7 @@ class ProposalBatch:
             "response_tokens": self.response_tokens,
             "runtime_ms": self.runtime_ms,
             "warnings": self.warnings,
+            "has_research_log": self.research_log is not None,
         }
 
 
@@ -141,6 +144,9 @@ class LawProposer:
         self._last_prompt: str = ""
         self._last_response: str = ""
 
+        # Research log for continuity across iterations
+        self._research_log: str | None = None
+
     def propose(
         self,
         memory: DiscoveryMemorySnapshot | DiscoveryMemory,
@@ -163,6 +169,10 @@ class LawProposer:
             snapshot = memory.get_snapshot()
         else:
             snapshot = memory
+
+        # Inject previous research log into snapshot for continuity
+        if self._research_log and not snapshot.previous_research_log:
+            snapshot.previous_research_log = self._research_log
 
         # Build prompt
         prompt = self._prompt_builder.build(
@@ -193,17 +203,6 @@ class LawProposer:
             )
             self._last_response = response
             llm_duration_ms = int((time.time() - llm_start) * 1000)
-
-            # Log successful LLM call
-            if self._llm_logger:
-                self._llm_logger.log_call(
-                    prompt=prompt,
-                    response=response,
-                    success=True,
-                    system_instruction=system_instruction,
-                    prompt_tokens=prompt_tokens,
-                    duration_ms=llm_duration_ms,
-                )
         except Exception as e:
             llm_duration_ms = int((time.time() - llm_start) * 1000)
 
@@ -231,6 +230,22 @@ class LawProposer:
         # Parse response
         parse_result = self._parser.parse(response)
 
+        # Extract and store research log for next iteration
+        if parse_result.research_log:
+            self._research_log = parse_result.research_log
+
+        # Log successful LLM call (after parsing to include research_log)
+        if self._llm_logger:
+            self._llm_logger.log_call(
+                prompt=prompt,
+                response=response,
+                success=True,
+                system_instruction=system_instruction,
+                research_log=parse_result.research_log,
+                prompt_tokens=prompt_tokens,
+                duration_ms=llm_duration_ms,
+            )
+
         # Filter for redundancy
         non_redundant, redundant = self._redundancy.filter_batch(parse_result.laws)
 
@@ -248,6 +263,7 @@ class LawProposer:
             response_tokens=response_tokens,
             runtime_ms=int((time.time() - start_time) * 1000),
             warnings=parse_result.warnings,
+            research_log=parse_result.research_log,
         )
 
         # Add to redundancy filter if configured
@@ -353,3 +369,26 @@ class LawProposer:
                 iteration_id=iteration_id,
                 phase=phase,
             )
+
+    def get_research_log(self) -> str | None:
+        """Get the current research log.
+
+        Returns:
+            The LLM's research notes from the most recent iteration
+        """
+        return self._research_log
+
+    def set_research_log(self, log: str | None) -> None:
+        """Set the research log for the next iteration.
+
+        This can be used to seed the proposer with an initial research context
+        or to restore state from persistence.
+
+        Args:
+            log: Research log content
+        """
+        self._research_log = log
+
+    def clear_research_log(self) -> None:
+        """Clear the research log, starting fresh."""
+        self._research_log = None

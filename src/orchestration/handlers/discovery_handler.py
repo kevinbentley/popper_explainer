@@ -63,6 +63,7 @@ class DiscoveryIterationResult:
     novelty_stats: dict[str, Any]
     is_saturated: bool
     verdicts: list[tuple[CandidateLaw, LawVerdict]]
+    research_log: str | None = None  # LLM's research notes for this iteration
 
 
 class DiscoveryPhaseHandler:
@@ -279,6 +280,10 @@ class DiscoveryPhaseHandler:
             }
             is_saturated = self.novelty_tracker.is_saturated()
 
+        # For parallel execution, get the research log from the proposer
+        # (it stores the most recent one from any worker)
+        research_log = self.proposer.get_research_log()
+
         return DiscoveryIterationResult(
             laws_proposed=len(laws),
             laws_passed=passed,
@@ -289,6 +294,7 @@ class DiscoveryPhaseHandler:
             novelty_stats=novelty_stats,
             is_saturated=is_saturated,
             verdicts=verdicts,
+            research_log=research_log,
         )
 
     def can_handle_requests(self, requests: list[PhaseRequest]) -> bool:
@@ -459,6 +465,7 @@ class DiscoveryPhaseHandler:
             novelty_stats=novelty_stats,
             is_saturated=is_saturated,
             verdicts=verdicts,
+            research_log=batch.research_log,
         )
 
     def _build_control_block(

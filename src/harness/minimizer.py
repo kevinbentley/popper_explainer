@@ -77,7 +77,9 @@ class Minimizer:
         # This would require more sophisticated state transformation
 
         # Regenerate trajectory excerpt from minimized state
-        trajectory = run(current_state, current_t_fail, current_config)
+        # Run enough steps to capture states around the failure (t_fail-2 to t_fail+2)
+        min_steps = current_t_fail + 3  # Need at least t_fail+2 states
+        trajectory = run(current_state, min_steps, current_config)
         excerpt_start = max(0, current_t_fail - 2)
         excerpt_end = min(len(trajectory), current_t_fail + 3)
         trajectory_excerpt = trajectory[excerpt_start:excerpt_end]

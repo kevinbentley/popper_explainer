@@ -163,12 +163,21 @@ That's all!"""
         assert len(result.warnings) > 0
 
     def test_not_array_warning(self, parser):
-        response = json.dumps({"name": "Single object"})
+        # Object without theorems field or theorem-like keys should warn
+        response = json.dumps({"random": "object", "without": "theorem_keys"})
         result = parser.parse(response)
 
         assert len(result.theorems) == 0
         assert len(result.warnings) > 0
-        assert "array" in result.warnings[0].lower()
+        assert "theorems" in result.warnings[0].lower()
+
+    def test_single_theorem_object_rejected(self, parser):
+        # Object with theorem-like keys but invalid data gets rejected, not warned
+        response = json.dumps({"name": "Single object"})
+        result = parser.parse(response)
+
+        assert len(result.theorems) == 0
+        assert len(result.rejections) == 1  # Rejected as invalid single theorem
 
     def test_partial_success(self, parser):
         response = json.dumps([

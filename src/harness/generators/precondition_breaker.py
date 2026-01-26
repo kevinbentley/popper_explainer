@@ -30,6 +30,7 @@ from src.universe.observables import (
     count_right,
     count_left,
     free_movers,
+    particle_count,
 )
 
 
@@ -582,7 +583,8 @@ class UniversalStressGenerator(Generator):
     STRESS_PATTERNS = [
         ("max_collision", "><><><"),       # Dense collisions
         ("multiplicity", ">>.<<"),         # 4-to-1 convergence
-        ("x_battery", "XX"),               # X-chain reaction
+        ("x_battery", "XX"),               # X-chain reaction (minimal)
+        ("x_battery_padded", "...XX..."),  # X-chain with padding (shows emission clearly)
         ("x_battery_3", "XXX"),            # Longer X chain
         ("wrap_right", "....>"),           # Right-mover at end
         ("wrap_left", "<...."),            # Left-mover at start
@@ -590,6 +592,7 @@ class UniversalStressGenerator(Generator):
         ("all_collision", "XXXXXX"),       # Pure collision state
         ("alternating", "><><><><><"),     # Dense alternating
         ("mass_convergence", ">>>...<<<"), # Many particles converging
+        ("x_in_path", ">.X.<"),            # Collision cell in path of movers
     ]
 
     def family_name(self) -> str:
@@ -711,3 +714,543 @@ class UniversalStressGenerator(Generator):
             left_pad = padding // 2
             right_pad = padding - left_pad
             return "." * left_pad + pattern + "." * right_pad
+
+
+class AntecedentTargetingGenerator(Generator):
+    """Generate states where implication antecedents are likely TRUE.
+
+    Problem: Implication laws often get "inconclusive_low_power" verdicts because
+    the antecedent rarely triggers in random states. For example:
+    - "empty grid implies no incoming collisions" - but empty grids are rare
+    - "no free movers implies X_count non-decreasing" - but most states have movers
+
+    Solution: Generate states that specifically satisfy common antecedent patterns,
+    ensuring the implication is actually tested rather than vacuously passing.
+
+    Key insight: An implication P -> Q is only meaningful when P is true.
+    If P is always false, the implication is vacuously true but untested.
+    """
+
+    # Common antecedent patterns and their satisfying states
+    ANTECEDENT_PATTERNS = {
+        # "No free movers" / "no particles moving"
+        "no_free_movers": [
+            ("only_x", "..XX.."),           # Only X cells, no > or <
+            ("only_x_dense", "XXXXXX"),      # Dense X
+            ("sparse_x", "..X...X.."),       # Sparse X
+            ("pure_empty", "........"),      # Completely empty
+        ],
+
+        # "Empty grid" / "no particles"
+        "empty_grid": [
+            ("empty_small", "....."),
+            ("empty_medium", ".........."),
+            ("empty_large", "................"),
+        ],
+
+        # "No collisions" / "CollisionCells == 0"
+        "no_collisions": [
+            ("movers_only", ">..<"),         # Free movers, no X
+            ("sparse_movers", "..>..<.."),   # Sparse movers
+            ("one_mover", "....>..."),       # Single mover
+            ("all_movers", "><><><><"),      # Dense but no X
+        ],
+
+        # "Single particle" states
+        "single_particle": [
+            ("one_right", "......>....."),
+            ("one_left", ".....<......"),
+        ],
+
+        # "No incoming collisions" / "particles not approaching"
+        "no_incoming_collisions": [
+            ("parallel_right", ">>...."),    # All moving same direction
+            ("parallel_left", "....<<"),     # All moving same direction
+            ("separated", ">.....<"),        # Movers moving apart
+        ],
+
+        # "Symmetric initial" states
+        "symmetric_state": [
+            ("mirror_simple", "><....><"),
+            ("mirror_complex", ">>.<<"),
+            ("center_sym", "..><.."),
+        ],
+
+        # "High density" states (for bounds/monotone testing)
+        "high_density": [
+            ("packed", "><><><><"),
+            ("half_packed", "><><...."),
+        ],
+    }
+
+    def family_name(self) -> str:
+        return "antecedent_targeting"
+
+    def generate(self, params: dict[str, Any], seed: int, count: int) -> list[Case]:
+        """Generate states targeting specific antecedent conditions.
+
+        Args:
+            params: {
+                "target_antecedent": str - which antecedent to target
+                    Options: "no_free_movers", "empty_grid", "no_collisions",
+                             "single_particle", "no_incoming_collisions",
+                             "symmetric_state", "high_density", or "all"
+                "grid_lengths": list[int] - grid sizes to test
+            }
+            seed: Random seed
+            count: Number of cases
+
+        Returns:
+            List of cases where the target antecedent is satisfied
+        """
+        rng = random.Random(seed)
+        target = params.get("target_antecedent", "all")
+        grid_lengths = params.get("grid_lengths", [8, 10, 12, 16])
+
+        cases = []
+        params_hash = self.params_hash(params)
+
+        if target == "all":
+            # Generate a mix of all antecedent types
+            all_patterns = []
+            for category, patterns in self.ANTECEDENT_PATTERNS.items():
+                for name, pattern in patterns:
+                    all_patterns.append((category, name, pattern))
+        else:
+            if target not in self.ANTECEDENT_PATTERNS:
+                # Unknown target, return empty
+                return cases
+            all_patterns = [
+                (target, name, pattern)
+                for name, pattern in self.ANTECEDENT_PATTERNS[target]
+            ]
+
+        # Generate cases from patterns
+        for i in range(count):
+            if i < len(all_patterns):
+                # Use deterministic patterns first
+                category, name, pattern = all_patterns[i % len(all_patterns)]
+                length = len(pattern)
+                state = pattern
+            else:
+                # Generate scaled/random variations
+                category, name, pattern = rng.choice(all_patterns)
+                length = rng.choice(grid_lengths)
+                state = self._scale_antecedent_pattern(pattern, category, length, rng)
+
+            cases.append(Case(
+                initial_state=state,
+                config=Config(grid_length=len(state)),
+                seed=seed + i,
+                generator_family=self.family_name(),
+                params_hash=params_hash,
+                metadata={
+                    "antecedent_category": category,
+                    "pattern_name": name,
+                    "antecedent_satisfied": self._verify_antecedent(state, category),
+                },
+            ))
+
+        return cases
+
+    def _scale_antecedent_pattern(
+        self, pattern: str, category: str, target_length: int, rng: random.Random
+    ) -> str:
+        """Scale an antecedent pattern while preserving its essential property."""
+        if target_length <= len(pattern):
+            return pattern[:target_length]
+
+        extra = target_length - len(pattern)
+
+        if category == "empty_grid":
+            return "." * target_length
+
+        elif category == "no_free_movers":
+            # Add more empty cells or X cells
+            num_x = len([c for c in pattern if c == "X"])
+            if num_x == 0:
+                return "." * target_length
+            # Keep same X density
+            x_density = num_x / len(pattern)
+            new_x = max(1, int(target_length * x_density))
+            result = ["." for _ in range(target_length)]
+            positions = rng.sample(range(target_length), new_x)
+            for pos in positions:
+                result[pos] = "X"
+            return "".join(result)
+
+        elif category == "no_collisions":
+            # Scale with movers, no X
+            result = ["." for _ in range(target_length)]
+            num_movers = max(1, len([c for c in pattern if c in "><"]))
+            # Spread movers out
+            for _ in range(min(num_movers, target_length // 2)):
+                pos = rng.randint(0, target_length - 1)
+                if result[pos] == ".":
+                    result[pos] = rng.choice([">", "<"])
+            return "".join(result)
+
+        elif category == "no_incoming_collisions":
+            # All movers moving same direction, or spread apart
+            direction = rng.choice([">", "<"])
+            result = ["." for _ in range(target_length)]
+            num_movers = rng.randint(1, target_length // 3)
+            positions = rng.sample(range(target_length), num_movers)
+            for pos in positions:
+                result[pos] = direction
+            return "".join(result)
+
+        else:
+            # Default: center pattern with padding
+            padding = target_length - len(pattern)
+            left_pad = padding // 2
+            right_pad = padding - left_pad
+            return "." * left_pad + pattern + "." * right_pad
+
+    def _verify_antecedent(self, state: str, category: str) -> bool:
+        """Verify that the state satisfies the target antecedent."""
+        if category == "empty_grid":
+            return particle_count(state) == 0
+
+        elif category == "no_free_movers":
+            return free_movers(state) == 0
+
+        elif category == "no_collisions":
+            return count_collision(state) == 0
+
+        elif category == "single_particle":
+            return particle_count(state) == 1
+
+        elif category == "no_incoming_collisions":
+            return incoming_collisions(state) == 0
+
+        # For other categories, just return True (pattern-based)
+        return True
+
+
+class HomogeneityStressGenerator(Generator):
+    """Generate states that distinguish shift_k (partial) from mirror_swap (universal) symmetry.
+
+    KEY INSIGHT:
+    - shift_k passes STATE COMMUTATION: step(shift_k(s)) == shift_k(step(s))
+    - But shift_k FAILS LOCAL PROBE INVARIANCE for non-uniform states:
+      cell_at(i, shift_k(s)) ≠ cell_at(i, s) unless state is homogeneous
+
+    - mirror_swap passes BOTH state commutation AND local probe invariance
+    - Therefore mirror_swap is a UNIVERSAL symmetry, shift_k is PARTIAL
+
+    Non-uniform states break shift_k's local probe invariance. Uniform states
+    (all same symbol) trivially satisfy both.
+
+    This generator helps the AI understand this distinction by providing:
+    1. Non-uniform states that break shift_k for local probes
+    2. Uniform states where shift_k trivially holds
+    3. States that highlight the difference between shift and mirror
+    """
+
+    # States that break shift_k's local probe invariance (non-uniform)
+    NON_UNIFORM_STATES = [
+        # Single particle - cell_at(0) changes under shift_k
+        (">......", "One right-mover: shift changes which cell has the particle"),
+        (".>.....", "Position 1 has '>': shift moves it to different cell"),
+        ("<......", "One left-mover at position 0"),
+        ("..X....", "One collision cell"),
+
+        # Asymmetric patterns - position matters
+        (">..<...", "Right-mover and left-mover: shift changes their relative positions"),
+        (">>.<<", "Convergence pattern: shift changes which cells have movers"),
+        (".><.", "Adjacent collision setup: shift changes collision location"),
+
+        # Complex non-uniform
+        (">...<..", "Two movers at different positions"),
+        ("..X..>..", "Collision and mover"),
+        (">X<", "All three symbols"),
+    ]
+
+    # Uniform states where shift_k trivially preserves local probes (homogeneous)
+    UNIFORM_STATES = [
+        (">>>>>>>", "All right-movers: shift_k is trivially identity on cells"),
+        ("<<<<<<<", "All left-movers: shift_k trivially holds"),
+        (".......", "All empty: shift_k trivially holds"),
+        ("XXXXXXX", "All collision: shift_k trivially holds"),
+    ]
+
+    # States that highlight shift vs mirror difference
+    SHIFT_VS_MIRROR_CONTRAST = [
+        # For these states:
+        # - shift_k changes cell_at(i) for most positions
+        # - mirror_swap also changes cell_at(i) BUT dynamics are mirror-symmetric
+        (">..", "shift_1: '.>.' (cell 0 changed), mirror: '..<' (dynamics preserved)"),
+        (".><", "shift vs mirror behave differently for collisions"),
+        (">>.", "shift changes where rightmost '>' is, mirror reverses directions"),
+    ]
+
+    def family_name(self) -> str:
+        return "homogeneity_stress"
+
+    def generate(self, params: dict[str, Any], seed: int, count: int) -> list[Case]:
+        """Generate homogeneity stress test cases.
+
+        Args:
+            params: {
+                "include_uniform": bool - include uniform states (default True)
+                "include_contrast": bool - include shift vs mirror contrast (default True)
+                "grid_lengths": list[int] - additional grid sizes for scaling
+            }
+            seed: Random seed
+            count: Number of cases
+
+        Returns:
+            List of cases that test homogeneity-related symmetry properties
+        """
+        rng = random.Random(seed)
+        include_uniform = params.get("include_uniform", True)
+        include_contrast = params.get("include_contrast", True)
+        grid_lengths = params.get("grid_lengths", [6, 8, 10, 12])
+
+        cases = []
+        params_hash = self.params_hash(params)
+
+        # Collect all patterns
+        all_patterns = []
+
+        # Non-uniform states (these break shift_k local probe invariance)
+        for state, desc in self.NON_UNIFORM_STATES:
+            all_patterns.append({
+                "state": state,
+                "description": desc,
+                "category": "non_uniform",
+                "breaks_shift_local_probe": True,
+            })
+
+        # Uniform states (shift_k trivially holds)
+        if include_uniform:
+            for state, desc in self.UNIFORM_STATES:
+                all_patterns.append({
+                    "state": state,
+                    "description": desc,
+                    "category": "uniform",
+                    "breaks_shift_local_probe": False,
+                })
+
+        # Shift vs mirror contrast
+        if include_contrast:
+            for state, desc in self.SHIFT_VS_MIRROR_CONTRAST:
+                all_patterns.append({
+                    "state": state,
+                    "description": desc,
+                    "category": "shift_vs_mirror",
+                    "breaks_shift_local_probe": True,
+                })
+
+        # Generate cases
+        for i in range(count):
+            if i < len(all_patterns):
+                pattern = all_patterns[i % len(all_patterns)]
+                state = pattern["state"]
+            else:
+                # Generate scaled versions
+                pattern = rng.choice(all_patterns)
+                length = rng.choice(grid_lengths)
+                state = self._scale_pattern(pattern["state"], pattern["category"], length, rng)
+                pattern = {**pattern, "scaled_to": length}
+
+            cases.append(Case(
+                initial_state=state,
+                config=Config(grid_length=len(state)),
+                seed=seed + i,
+                generator_family=self.family_name(),
+                params_hash=params_hash,
+                metadata={
+                    "category": pattern["category"],
+                    "breaks_shift_local_probe": pattern["breaks_shift_local_probe"],
+                    "description": pattern.get("description", ""),
+                    "is_uniform": self._is_uniform(state),
+                },
+            ))
+
+        return cases
+
+    def _is_uniform(self, state: str) -> bool:
+        """Check if a state is uniform (all cells the same symbol)."""
+        if not state:
+            return True
+        return all(c == state[0] for c in state)
+
+    def _scale_pattern(
+        self, pattern: str, category: str, target_length: int, rng: random.Random
+    ) -> str:
+        """Scale a pattern while preserving its homogeneity property."""
+        if target_length <= len(pattern):
+            return pattern[:target_length]
+
+        if category == "uniform":
+            # Extend with the uniform symbol
+            symbol = pattern[0] if pattern else "."
+            return symbol * target_length
+
+        else:
+            # For non-uniform, add empty padding to preserve structure
+            padding = target_length - len(pattern)
+            # Randomly distribute padding
+            left_pad = rng.randint(0, padding)
+            right_pad = padding - left_pad
+            return "." * left_pad + pattern + "." * right_pad
+
+
+class ComponentObservableStressor(Generator):
+    """Generate states that expose the difference between symbol counts and component counts.
+
+    CRITICAL PHYSICS INSIGHT:
+    - count('>') is NOT conserved (decreases when > enters collision)
+    - RightComponent = count('>') + count('X') IS conserved
+    - Similarly for LeftComponent = count('<') + count('X')
+    - TotalParticles = count('>') + count('<') + 2*count('X')
+
+    This generator creates states where:
+    1. Symbol counts (count('>'), count('<')) CHANGE
+    2. Component observables (RightComponent, LeftComponent) stay CONSTANT
+
+    The AI often hallucinate "Fragile Conservation" - claiming count('>') is
+    conserved "except during collisions". This is wrong. True conservation
+    quantities don't have exceptions.
+
+    These stress cases help the AI discover proper component observables.
+    """
+
+    # States that demonstrate count('>') changing while RightComponent stays constant
+    COMPONENT_STRESS_STATES = [
+        # (state, description, expected_change)
+        # expected_change: what happens to count('>') vs RightComponent
+        ("><", "t0: count('>')=1, RC=1 | t1: count('>')=0, RC=1", {
+            "t0": {"count_right": 1, "count_left": 1, "count_X": 0, "right_component": 1, "left_component": 1},
+            "t1_expected": {"count_right": 0, "count_left": 0, "count_X": 1, "right_component": 1, "left_component": 1},
+        }),
+
+        (".><.", "Collision forms at center: count('>') drops but RC preserved", {
+            "t0": {"count_right": 1, "count_left": 1, "count_X": 0, "right_component": 1, "left_component": 1},
+        }),
+
+        (">><<", "2 right-movers, 2 left-movers: both symbol counts drop to 0", {
+            "t0": {"count_right": 2, "count_left": 2, "count_X": 0, "right_component": 2, "left_component": 2},
+        }),
+
+        ("..XX..", "X-Battery: count('>') INCREASES when X emits, but RC stays constant", {
+            "t0": {"count_right": 0, "count_left": 0, "count_X": 2, "right_component": 2, "left_component": 2},
+            "note": "After emission, count('>') > 0 but RightComponent still = 2",
+        }),
+
+        (">...<", "Slow approach: watch count('>') stay at 1 until collision", {
+            "multi_step": True,
+            "note": "count('>') stable while particles apart, drops when collision forms",
+        }),
+
+        (">X<", "All three symbols: >X< shows mixed state", {
+            "t0": {"count_right": 1, "count_left": 1, "count_X": 1, "right_component": 2, "left_component": 2},
+        }),
+
+        (">>>..<<<", "Mass convergence: multiple collisions form, many symbol counts drop", {
+            "t0": {"count_right": 3, "count_left": 3, "count_X": 0, "right_component": 3, "left_component": 3},
+        }),
+    ]
+
+    def family_name(self) -> str:
+        return "component_observable_stress"
+
+    def generate(self, params: dict[str, Any], seed: int, count: int) -> list[Case]:
+        """Generate component observable stress test cases.
+
+        Args:
+            params: {
+                "focus_on_change": bool - prioritize states where symbol counts change
+                "grid_lengths": list[int] - additional grid sizes
+            }
+            seed: Random seed
+            count: Number of cases
+
+        Returns:
+            List of cases that demonstrate component vs symbol count differences
+        """
+        rng = random.Random(seed)
+        focus_on_change = params.get("focus_on_change", True)
+        grid_lengths = params.get("grid_lengths", [6, 8, 10, 12])
+
+        cases = []
+        params_hash = self.params_hash(params)
+
+        for i in range(count):
+            if i < len(self.COMPONENT_STRESS_STATES):
+                state, desc, expected = self.COMPONENT_STRESS_STATES[i]
+            else:
+                # Generate scaled or random variations
+                base_state, desc, expected = rng.choice(self.COMPONENT_STRESS_STATES)
+                length = rng.choice(grid_lengths)
+                state = self._scale_state(base_state, length, rng)
+                expected = self._compute_expected(state)
+
+            # Compute actual observable values
+            observables = self._compute_observables(state)
+
+            cases.append(Case(
+                initial_state=state,
+                config=Config(grid_length=len(state)),
+                seed=seed + i,
+                generator_family=self.family_name(),
+                params_hash=params_hash,
+                metadata={
+                    "description": desc,
+                    "observables_t0": observables,
+                    "expected_behavior": expected,
+                    "key_insight": (
+                        "count('>') will change, but RightComponent = count('>') + count('X') "
+                        "is conserved. The AI should discover this relationship."
+                    ),
+                },
+            ))
+
+        return cases
+
+    def _scale_state(self, pattern: str, target_length: int, rng: random.Random) -> str:
+        """Scale a state pattern while preserving collision-forming structure."""
+        if target_length <= len(pattern):
+            return pattern[:target_length]
+
+        # Add padding
+        padding = target_length - len(pattern)
+        left_pad = rng.randint(0, padding)
+        right_pad = padding - left_pad
+        return "." * left_pad + pattern + "." * right_pad
+
+    def _compute_observables(self, state: str) -> dict[str, int]:
+        """Compute all relevant observables for a state."""
+        cr = count_right(state)
+        cl = count_left(state)
+        cx = count_collision(state)
+
+        return {
+            "count_right": cr,
+            "count_left": cl,
+            "count_X": cx,
+            "RightComponent": cr + cx,
+            "LeftComponent": cl + cx,
+            "TotalParticles": cr + cl + 2 * cx,
+            "Momentum": cr - cl,
+        }
+
+    def _compute_expected(self, state: str) -> dict[str, Any]:
+        """Compute expected behavior for a state."""
+        observables = self._compute_observables(state)
+        has_collision_forming = incoming_collisions(state) > 0
+        has_x = count_collision(state) > 0
+
+        return {
+            "t0_observables": observables,
+            "will_form_collision": has_collision_forming,
+            "has_existing_X": has_x,
+            "note": (
+                "Symbol counts WILL change if collisions form. "
+                "Component observables WILL remain constant."
+            ) if has_collision_forming else (
+                "No imminent collisions. Symbol counts stable for now."
+            ),
+        }

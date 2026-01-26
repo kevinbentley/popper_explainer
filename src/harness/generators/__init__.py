@@ -14,6 +14,9 @@ from src.harness.generators.precondition_breaker import (
     MultiplicityGenerator,
     PeriodicBoundaryGenerator,
     UniversalStressGenerator,
+    AntecedentTargetingGenerator,
+    HomogeneityStressGenerator,
+    ComponentObservableStressor,
 )
 
 # Register all generators
@@ -31,6 +34,12 @@ GeneratorRegistry.register("multiplicity_crowding", MultiplicityGenerator)
 GeneratorRegistry.register("periodic_boundary_stress", PeriodicBoundaryGenerator)
 # Universal stress states - mandatory tests run FIRST for every law
 GeneratorRegistry.register("universal_stress", UniversalStressGenerator)
+# Antecedent targeting - helps low-power implication laws get proper testing
+GeneratorRegistry.register("antecedent_targeting", AntecedentTargetingGenerator)
+# Homogeneity stress - distinguishes shift_k (partial) from mirror_swap (universal) symmetry
+GeneratorRegistry.register("homogeneity_stress", HomogeneityStressGenerator)
+# Component observable stress - teaches AI the difference between symbol and component counts
+GeneratorRegistry.register("component_observable_stress", ComponentObservableStressor)
 
 __all__ = [
     "Generator",
@@ -47,4 +56,7 @@ __all__ = [
     "MultiplicityGenerator",
     "PeriodicBoundaryGenerator",
     "UniversalStressGenerator",
+    "AntecedentTargetingGenerator",
+    "HomogeneityStressGenerator",
+    "ComponentObservableStressor",
 ]

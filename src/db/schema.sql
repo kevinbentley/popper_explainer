@@ -617,6 +617,7 @@ CREATE TABLE IF NOT EXISTS llm_transcripts (
     system_instruction TEXT,
     prompt TEXT NOT NULL,
     raw_response TEXT NOT NULL,
+    research_log TEXT,  -- Extracted research_log from LLM response for easy querying
     prompt_hash TEXT,
     prompt_tokens INTEGER,
     output_tokens INTEGER,

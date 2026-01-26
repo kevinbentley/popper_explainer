@@ -107,7 +107,9 @@ class TestPromptBuilder:
 
         assert "FALSIFIED LAWS" in prompt
         assert "false_law" in prompt
-        assert ">..<" in prompt
+        # Scrambler converts physical symbols to abstract: > → A, . → _, < → B
+        # So ">..<" becomes "A__B"
+        assert "A__B" in prompt
 
     def test_target_templates(self):
         """Prompt includes target template guidance."""
