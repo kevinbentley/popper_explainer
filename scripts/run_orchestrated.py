@@ -281,6 +281,14 @@ def run_orchestration(args) -> int:
 
     novelty_tracker = NoveltyTracker()
 
+    # Create reflection engine for periodic auditor/theorist analysis
+    from src.reflection.engine import ReflectionEngine
+    reflection_logger = LLMLogger(repo, component="reflection", model_name=model_name)
+    reflection_engine = ReflectionEngine(
+        client=llm_client,
+        llm_logger=reflection_logger,
+    )
+
     # Create discovery handler
     discovery_config = DiscoveryPhaseConfig(num_workers=args.num_workers)
     discovery_handler = DiscoveryPhaseHandler(
@@ -289,6 +297,7 @@ def run_orchestration(args) -> int:
         novelty_tracker=novelty_tracker,
         repo=repo,
         config=discovery_config,
+        reflection_engine=reflection_engine,
     )
 
     # Create theorem handler

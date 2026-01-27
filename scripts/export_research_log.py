@@ -91,7 +91,11 @@ def format_as_text(logs: list[dict]) -> str:
         lines.append(f"Phase: {log['phase']}")
         lines.append(f"Time: {log['created_at']}")
         lines.append("")
-        lines.append(log["research_log"])
+        research_log = log["research_log"]
+        if isinstance(research_log, dict):
+            lines.append(json.dumps(research_log, indent=2))
+        else:
+            lines.append(str(research_log))
         lines.append("")
         lines.append("")
 
@@ -112,7 +116,13 @@ def format_as_markdown(logs: list[dict]) -> str:
         lines.append("")
         lines.append(f"*Phase: {log['phase']} | Time: {log['created_at']}*")
         lines.append("")
-        lines.append(log["research_log"])
+        research_log = log["research_log"]
+        if isinstance(research_log, dict):
+            lines.append("```json")
+            lines.append(json.dumps(research_log, indent=2))
+            lines.append("```")
+        else:
+            lines.append(str(research_log))
         lines.append("")
         lines.append("---")
         lines.append("")

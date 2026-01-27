@@ -21,6 +21,7 @@ from src.harness.integrity import (
 
 logger = logging.getLogger(__name__)
 
+from src.claims.ast_evaluator import ASTEvaluationError
 from src.claims.compiler import CompilationError
 from src.claims.schema import CandidateLaw, Template
 from src.claims.vacuity import VacuityReport
@@ -85,7 +86,7 @@ class Harness:
         # Try to compile the law
         try:
             self._evaluator.prepare(law)
-        except CompilationError as e:
+        except (CompilationError, ASTEvaluationError) as e:
             return LawVerdict(
                 law_id=law.law_id,
                 status="UNKNOWN",

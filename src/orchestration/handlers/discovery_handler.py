@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from src.ahc.tools.simulate_states import SimulateStatesTool
 from src.claims.schema import CandidateLaw
 from src.db.models import NoveltySnapshotRecord
 from src.discovery.novelty import NoveltyTracker
@@ -134,6 +135,7 @@ class DiscoveryPhaseHandler:
         request = self._build_request(context)
 
         # Propose laws (parallel if num_workers > 1)
+        simulation_results: list[dict[str, Any]] = []
         if self.config.num_workers > 1:
             all_laws, total_rejections, total_redundant, warnings = self._propose_parallel(
                 memory, request
@@ -144,6 +146,12 @@ class DiscoveryPhaseHandler:
             total_rejections = len(batch.rejections)
             total_redundant = len(batch.redundant)
             warnings = batch.warnings
+
+            # Execute simulation requests from the LLM
+            if batch.simulation_requests:
+                simulation_results = self._execute_simulation_requests(
+                    batch.simulation_requests
+                )
 
         # Evaluate proposed laws
         verdicts: list[tuple[CandidateLaw, LawVerdict]] = []
@@ -178,7 +186,19 @@ class DiscoveryPhaseHandler:
                 result.research_log = reflection_addendum
 
         # Build control block
-        return self._build_control_block(result, context)
+        control_block = self._build_control_block(result, context)
+
+        logger.info(
+            "run_iteration: research_log going into control block: present=%s len=%d",
+            control_block.phase_outputs.get("research_log") is not None,
+            len(control_block.phase_outputs.get("research_log", "") or ""),
+        )
+
+        # Store simulation results in phase outputs for next iteration
+        if simulation_results:
+            control_block.phase_outputs["simulation_results"] = simulation_results
+
+        return control_block
 
     def _propose_parallel(
         self,
@@ -348,18 +368,45 @@ class DiscoveryPhaseHandler:
         falsified_laws: list[dict[str, Any]] = []
         counterexample_gallery: list[dict[str, Any]] = []
 
-        # Extract previous research_log from the most recent control block.
-        # This is the primary persistence mechanism — it survives crashes and
-        # resumes because control blocks are stored in the database.
+        # Extract previous research_log and simulation results from the most
+        # recent control block. This is the primary persistence mechanism — it
+        # survives crashes and resumes because control blocks are stored in the
+        # database.
         previous_research_log: str | None = None
+        previous_simulation_results: list[dict[str, Any]] | None = None
+        logger.debug(
+            "_build_memory: %d previous control blocks available",
+            len(context.previous_control_blocks),
+        )
         if context.previous_control_blocks:
-            # Control blocks are ordered most-recent-first
-            for cb in context.previous_control_blocks:
+            # Scan newest-first so we pick up the most recent research log
+            # and simulation results (control blocks are stored oldest-first)
+            for cb in reversed(context.previous_control_blocks):
                 outputs = cb.phase_outputs or {}
-                log = outputs.get("research_log")
-                if log and isinstance(log, str):
-                    previous_research_log = log
+                logger.debug(
+                    "_build_memory: control block iter=%s phase=%s has phase_outputs keys=%s, research_log type=%s len=%s",
+                    getattr(cb, 'iteration_number', '?'),
+                    getattr(cb, 'phase_name', '?'),
+                    list(outputs.keys()),
+                    type(outputs.get("research_log")).__name__,
+                    len(outputs.get("research_log", "") or ""),
+                )
+                if previous_research_log is None:
+                    log = outputs.get("research_log")
+                    if log and isinstance(log, str):
+                        previous_research_log = log
+                if previous_simulation_results is None:
+                    sim_results = outputs.get("simulation_results")
+                    if sim_results and isinstance(sim_results, list):
+                        previous_simulation_results = sim_results
+                # Stop once we have both
+                if previous_research_log is not None and previous_simulation_results is not None:
                     break
+        logger.info(
+            "_build_memory: previous_research_log=%s (len=%d)",
+            previous_research_log is not None,
+            len(previous_research_log) if previous_research_log else 0,
+        )
 
         if context.repo:
             # Track seen law_ids to avoid duplicates
@@ -467,6 +514,7 @@ class DiscoveryPhaseHandler:
             counterexamples=counterexample_gallery[:20],  # Limit size
             unknown_laws=[],
             previous_research_log=previous_research_log,
+            previous_simulation_results=previous_simulation_results,
             standard_model_summary=standard_model_summary,
             priority_research_directions=priority_research_directions,
         )
@@ -495,6 +543,58 @@ class DiscoveryPhaseHandler:
             target_templates=target_templates,
             exclude_templates=exclude_templates,
         )
+
+    def _execute_simulation_requests(
+        self,
+        requests: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Execute simulation requests from the LLM.
+
+        Each request has {"state": str, "T": int}. Results are returned
+        with the original request fields plus either "state_sequence" or "error".
+
+        Args:
+            requests: List of simulation request dicts
+
+        Returns:
+            List of result dicts with state_sequence or error
+        """
+        tool = SimulateStatesTool()
+        results: list[dict[str, Any]] = []
+
+        for req in requests:
+            state = req["state"]
+            t_val = req["T"]
+            try:
+                tool_result = tool.execute(state=state, T=t_val)
+                if tool_result.success:
+                    results.append({
+                        "state": state,
+                        "T": t_val,
+                        "state_sequence": tool_result.data.get("state_sequence", []),
+                    })
+                else:
+                    results.append({
+                        "state": state,
+                        "T": t_val,
+                        "error": tool_result.error or "Unknown error",
+                    })
+            except Exception as e:
+                logger.error(f"Simulation request failed for state='{state}', T={t_val}: {e}")
+                results.append({
+                    "state": state,
+                    "T": t_val,
+                    "error": str(e),
+                })
+
+        if results:
+            logger.info(
+                f"Executed {len(results)} simulation requests: "
+                f"{sum(1 for r in results if 'state_sequence' in r)} succeeded, "
+                f"{sum(1 for r in results if 'error' in r)} failed"
+            )
+
+        return results
 
     def _build_result(
         self,

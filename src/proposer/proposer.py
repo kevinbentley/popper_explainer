@@ -64,6 +64,7 @@ class ProposalBatch:
     runtime_ms: int = 0
     warnings: list[str] = field(default_factory=list)
     research_log: str | None = None
+    simulation_requests: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for logging."""
@@ -78,6 +79,7 @@ class ProposalBatch:
             "runtime_ms": self.runtime_ms,
             "warnings": self.warnings,
             "has_research_log": self.research_log is not None,
+            "simulation_requests_count": len(self.simulation_requests),
         }
 
 
@@ -270,6 +272,7 @@ class LawProposer:
             runtime_ms=int((time.time() - start_time) * 1000),
             warnings=parse_result.warnings,
             research_log=parse_result.research_log,
+            simulation_requests=parse_result.simulation_requests,
         )
 
         # Add to redundancy filter if configured

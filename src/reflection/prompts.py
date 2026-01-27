@@ -4,6 +4,19 @@ Two separate calls:
 1. Auditor: conflict detection, tautology/redundancy pruning (low temperature)
 2. Theorist: derived observables, hidden variables, causal narrative (higher temperature)
 
+SCIENTIFIC INTEGRITY NOTE:
+These prompts must NOT leak physics knowledge to the LLM. The LLM must
+synthesize theory from empirical evidence alone, not from hints embedded
+in the prompt about which quantities are conserved, what symbols represent,
+or how the universe works.
+
+If you modify this file, ensure you do NOT:
+- Label observables as "conserved" or "not conserved"
+- Explain what symbols represent (e.g., "A is a mover", "K is a collision")
+- Provide verified laws, physics explanations, or known conservation quantities
+- Give examples that reference specific symbol expressions (count(A), count(B), etc.)
+- Use physics-laden terms (particle, mover, collision, momentum, boundary) in examples
+
 SYMBOL SCRAMBLING:
 All inputs to the LLM use abstract symbols (W, A, B, K). The prompts
 must not contain physical symbol references.
@@ -64,19 +77,22 @@ You have access to:
 
 Your tasks:
 
-1. DERIVED OBSERVABLES: Identify combinations of existing observables that might reveal deeper structure.
-   - "If count(A) + count(B) is conserved, what about count(A) - count(B)?"
-   - "Is there a ratio or product of observables that stays constant?"
+1. DERIVED OBSERVABLES: Identify combinations of existing observables that might reveal
+   deeper structure. Look at accepted laws and ask: are there arithmetic combinations
+   (sums, differences, products, ratios) of known observables that might also be invariant
+   or informative? Let the data guide you — do not guess from symbol names.
 
 2. HIDDEN VARIABLES: Postulate variables that are NOT directly observable but whose existence
    would explain anomalies or unify multiple laws.
-   - Example: "The graveyard shows many laws about count(A) fail near grid boundaries.
-     Perhaps there is a hidden 'boundary interaction count' that we cannot directly measure
-     but which modulates count(A) behavior."
+   - Look at patterns of failure in the graveyard: do falsified laws share common features
+     in their counterexamples? What unobserved quantity, if it existed, would explain why
+     some laws hold only under certain conditions?
    - Each hidden variable MUST include a testable prediction — otherwise it is not scientific.
 
 3. CAUSAL NARRATIVE: Write a coherent 2-5 paragraph narrative explaining how the universe works
    based on current evidence. This should connect the dots between accepted laws.
+   Base your narrative ONLY on what the evidence shows. Do not speculate about what symbols
+   "represent" or assign physical interpretations beyond what the data supports.
 
 4. KNOWLEDGE DECOMPOSITION: Categorize what we know:
    - Firmly established (high-power PASS, survived many tests)
@@ -91,7 +107,7 @@ Respond with a JSON object matching this schema:
 {
   "derived_observables": [
     {
-      "name": "string — descriptive name",
+      "name": "string — descriptive name (use canonical observable names where possible)",
       "expression": "string — mathematical expression using existing observables",
       "rationale": "string — why this might be informative",
       "source_laws": ["string — law_ids that motivated this"]

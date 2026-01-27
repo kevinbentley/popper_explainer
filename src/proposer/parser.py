@@ -1,9 +1,12 @@
 """Response parser for LLM law proposals."""
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 from src.claims.ast_schema import validate_claim_ast
 from src.claims.schema import (
@@ -45,6 +48,7 @@ class ParseResult:
     rejections: list[tuple[dict[str, Any], str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     research_log: str | None = None
+    simulation_requests: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ResponseParser:
@@ -102,8 +106,49 @@ class ResponseParser:
                 research_log = data["research_log"]
                 if isinstance(research_log, str):
                     result.research_log = research_log
+                elif isinstance(research_log, dict):
+                    # LLM returned structured sections — flatten to string
+                    parts = []
+                    for section_name, section_content in research_log.items():
+                        parts.append(f"### {section_name}")
+                        if isinstance(section_content, str):
+                            parts.append(section_content)
+                        elif isinstance(section_content, list):
+                            for item in section_content:
+                                parts.append(f"- {item}")
+                        else:
+                            parts.append(str(section_content))
+                        parts.append("")
+                    result.research_log = "\n".join(parts).strip()
+                    logger.debug(
+                        "research_log was a dict with keys %s, converted to string (len=%d)",
+                        list(research_log.keys()),
+                        len(result.research_log),
+                    )
                 else:
-                    result.warnings.append("research_log should be a string")
+                    result.warnings.append(
+                        f"research_log has unexpected type {type(research_log).__name__}, expected string or dict"
+                    )
+
+            # Extract simulation_requests if present
+            if "simulation_requests" in data:
+                raw_requests = data["simulation_requests"]
+                if isinstance(raw_requests, list):
+                    for req in raw_requests:
+                        if not isinstance(req, dict):
+                            result.warnings.append("simulation_request entry is not an object, skipping")
+                            continue
+                        state = req.get("state")
+                        t_val = req.get("T")
+                        if not isinstance(state, str) or not state:
+                            result.warnings.append(f"simulation_request missing valid 'state' string, skipping: {req}")
+                            continue
+                        if not isinstance(t_val, int) or t_val < 0:
+                            result.warnings.append(f"simulation_request missing valid 'T' (non-negative int), skipping: {req}")
+                            continue
+                        result.simulation_requests.append({"state": state, "T": t_val})
+                else:
+                    result.warnings.append("simulation_requests should be a list")
 
             # Extract candidate_laws
             if "candidate_laws" in data:
@@ -361,10 +406,26 @@ class ResponseParser:
 
     def _parse_quantifiers(self, data: dict[str, Any]) -> Quantifiers:
         """Parse quantifiers from data."""
-        return Quantifiers(
-            T=data.get("T", 50),
-            H=data.get("H"),
-        )
+        T = data.get("T", 50)
+        H = data.get("H")
+        # Clamp T to valid range (Quantifiers requires T >= 1)
+        try:
+            T = int(T)
+        except (TypeError, ValueError):
+            T = 50
+        if T < 1:
+            self._warnings.append(f"Quantifiers T={T} is below minimum 1, clamping to 1")
+            T = 1
+        # Clamp H if provided
+        if H is not None:
+            try:
+                H = int(H)
+            except (TypeError, ValueError):
+                H = None
+            if H is not None and H < 1:
+                self._warnings.append(f"Quantifiers H={H} is below minimum 1, clamping to 1")
+                H = 1
+        return Quantifiers(T=T, H=H)
 
     def _parse_preconditions(self, data: list[dict[str, Any]]) -> list[Precondition]:
         """Parse preconditions from data.

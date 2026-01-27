@@ -378,8 +378,16 @@ class OrchestratorEngine:
                 try:
                     cb = ControlBlock.from_json(it.control_block_json)
                     previous_control_blocks.append(cb)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "_build_context: failed to parse control block for iteration %s: %s",
+                        it.iteration_index, e,
+                    )
+        logger.debug(
+            "_build_context: %d iterations queried, %d control blocks parsed, passing last 5 to handler",
+            len(recent_iterations),
+            len(previous_control_blocks),
+        )
 
         # Get current readiness
         readiness = self.readiness_computer.compute_for_phase(

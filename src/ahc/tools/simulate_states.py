@@ -1,8 +1,8 @@
-"""Tool for simulating trajectories in the abstract symbol space.
+"""Tool for simulating state sequences in the abstract symbol space.
 
-This tool is the LLM-facing trajectory simulator. It:
+This tool is the LLM-facing state simulator. It:
 - Accepts states in the abstract alphabet (W, A, B, K)
-- Returns trajectories in the abstract alphabet
+- Returns state sequences in the abstract alphabet
 - Uses opaque error messages that do not leak universe physics
 
 The tool enforces the universe contract (K is invalid at t=0) but
@@ -21,12 +21,12 @@ from src.universe.validation import is_valid_initial_state
 
 logger = logging.getLogger(__name__)
 
-# Maximum trajectory length to prevent abuse
+# Maximum time steps to prevent abuse
 _MAX_TIME_STEPS = 500
 
 
-class SimulateTrajectoryTool(BaseTool):
-    """Simulate a trajectory from an initial state in abstract symbols.
+class SimulateStatesTool(BaseTool):
+    """Simulate a state sequence from an initial state in abstract symbols.
 
     Takes an initial configuration string using abstract symbols (W, A, B, K)
     and a number of time steps T, then returns the state at each step
@@ -38,7 +38,7 @@ class SimulateTrajectoryTool(BaseTool):
 
     @property
     def name(self) -> str:
-        return "simulate_trajectory"
+        return "simulate_states"
 
     @property
     def description(self) -> str:
@@ -72,14 +72,14 @@ class SimulateTrajectoryTool(BaseTool):
         ]
 
     def execute(self, state: str, T: int = 1, **kwargs) -> ToolResult:
-        """Execute the trajectory simulation.
+        """Execute the state simulation.
 
         Args:
             state: Initial state in abstract symbols (W, A, B, K)
             T: Number of time steps
 
         Returns:
-            ToolResult with trajectory in abstract symbols
+            ToolResult with state sequence in abstract symbols
         """
         try:
             T = int(T)
@@ -123,15 +123,15 @@ class SimulateTrajectoryTool(BaseTool):
             logger.exception("Simulation failed for state: %s", state)
             return ToolResult.fail(f"Simulation error: {e}")
 
-        # --- Translate trajectory back to abstract symbols ---
-        abstract_trajectory = [
+        # --- Translate back to abstract symbols ---
+        abstract_sequence = [
             self._scrambler.to_abstract(s) for s in trajectory
         ]
 
         return ToolResult.ok(
             data={
-                "initial_state": abstract_trajectory[0],
+                "initial_state": abstract_sequence[0],
                 "T": T,
-                "trajectory": abstract_trajectory,
+                "state_sequence": abstract_sequence,
             }
         )

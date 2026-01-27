@@ -303,7 +303,7 @@ For symmetry_commutation: include "transform" field, claim_ast can be null
 
 === OUTPUT FORMAT ===
 
-Your response MUST be a JSON object with two fields:
+Your response MUST be a JSON object with these fields:
 
 {
   "research_log": "Your CUMULATIVE SUMMARY — a structured, living document you UPDATE each iteration (see below).",
@@ -317,8 +317,25 @@ Your response MUST be a JSON object with two fields:
       "forbidden": "exists t where Q(t) != Q(0)",
       "proposed_tests": [{"family": "random_density_sweep", "params": {"cases": 100}}]
     }
+  ],
+  "simulation_requests": [
+    {"state": "WWABWWW", "T": 5}
   ]
 }
+
+=== SIMULATION REQUESTS (OPTIONAL) ===
+
+You may include a "simulation_requests" field to observe how specific configurations evolve.
+Each request specifies an initial state and a number of time steps. Results will be provided
+in the next iteration under "SIMULATION RESULTS".
+
+Rules:
+- "state": A string using valid symbols (W, A, B, K). Must be non-empty.
+- "T": A non-negative integer (number of time steps to simulate). Maximum 500.
+- Configurations that are invalid at t=0 will return an error message rather than a state sequence.
+  You cannot predict which configurations are invalid — you must discover this empirically.
+- Use simulations to CHECK your hypotheses about how the universe evolves, not as a substitute
+  for proposing falsifiable laws. Simulations are observations; laws are explanations.
 
 === CUMULATIVE SUMMARY (research_log) ===
 
@@ -432,6 +449,12 @@ class PromptBuilder:
         # Inject the LLM's previous research log for continuity
         if memory.previous_research_log:
             sections.append(self._build_research_log_section(memory.previous_research_log))
+
+        # === SIMULATION RESULTS (from previous iteration) ===
+        if memory.previous_simulation_results:
+            sections.append(self._build_simulation_results_section(
+                memory.previous_simulation_results
+            ))
 
         # === STATIC SECTION (for caching) ===
         # Universe capabilities - this rarely changes
@@ -588,6 +611,38 @@ rather than rewriting from scratch:
 {previous_log}
 
 === END OF PREVIOUS SUMMARY ==="""
+
+    def _build_simulation_results_section(
+        self, results: list[dict[str, Any]]
+    ) -> str:
+        """Build section showing simulation results from the previous iteration.
+
+        These are responses to the LLM's simulation_requests from last iteration.
+        Each result shows the initial state, T, and the resulting state sequence
+        (or an error if the configuration was invalid).
+        """
+        lines = [
+            "=== SIMULATION RESULTS (from your previous requests) ===",
+            "",
+        ]
+        for i, result in enumerate(results, 1):
+            state = result.get("state", "?")
+            t_val = result.get("T", "?")
+            if "error" in result:
+                lines.append(f"{i}. state=\"{state}\", T={t_val}")
+                lines.append(f"   ERROR: {result['error']}")
+            else:
+                sequence = result.get("state_sequence", [])
+                lines.append(f"{i}. state=\"{state}\", T={t_val}")
+                if len(sequence) <= 20:
+                    lines.append(f"   state_sequence: {' -> '.join(sequence)}")
+                else:
+                    # Show first 10 and last 5 for long sequences
+                    head = " -> ".join(sequence[:10])
+                    tail = " -> ".join(sequence[-5:])
+                    lines.append(f"   state_sequence: {head} -> ... -> {tail}")
+            lines.append("")
+        return "\n".join(lines)
 
     def _build_accepted_section(self, laws: list[dict[str, Any]]) -> str:
         """Build accepted laws section."""

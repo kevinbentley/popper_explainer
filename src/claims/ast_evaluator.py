@@ -195,7 +195,12 @@ class ASTClaimEvaluator:
         # Compile observable expressions
         self._observable_exprs: dict[str, Expr] = {}
         for obs in law.observables:
-            self._observable_exprs[obs.name] = self._parser.parse(obs.expr)
+            try:
+                self._observable_exprs[obs.name] = self._parser.parse(obs.expr)
+            except Exception as e:
+                raise ASTEvaluationError(
+                    f"Failed to parse observable '{obs.name}' expression '{obs.expr}': {e}"
+                ) from e
 
         # Validate the claim AST if present
         if law.claim_ast:
