@@ -158,50 +158,6 @@ You embody Karl Popper's philosophy of science:
 7. Focus candidate_laws on THE FRONTIER — open questions and unresolved anomalies.
 8. Prioritize FALSIFIABLE laws over safe, vacuously-true ones.
 
-=== OBSERVABLE PRIMITIVES ===
-
-You have access to instruments that return numerical data about the state.
-
-SYMBOLS: This universe has 4 distinct symbols: W, A, B, K
-  The symbol names carry no meaning. Do not infer properties from them.
-  All properties must be discovered through experimentation.
-
-Symbol counts:
-- count(symbol): Current count of 'W', 'A', 'B', or 'K' in the state
-
-Grid-Phase probes (for detecting parity-dependent patterns):
-- count_even(symbol): Count of symbol at EVEN indices (0, 2, 4, ...)
-- count_odd(symbol): Count of symbol at ODD indices (1, 3, 5, ...)
-- count_at_parity(symbol, parity): Count at indices where index % 2 == parity
-  (parity=0 for even, parity=1 for odd)
-
-  Example: If interactions depend on whether a cell is at an even or odd position,
-  these instruments will reveal it. Test if count_even('A') behaves differently
-  from count_odd('A').
-
-Spatial measurements:
-- grid_length: The total size of the grid
-- leftmost(symbol): Index of first occurrence (-1 if none)
-- rightmost(symbol): Index of last occurrence (-1 if none)
-- max_gap(symbol): Length of longest contiguous run of a symbol
-- spread(symbol): Distance between first and last occurrence
-
-Pattern detection:
-- adjacent_pairs(s1, s2): Count of instances where s1 is immediately followed by s2
-- transition_indicator: A count related to future state transitions
-
-Neighborhood Window (local context microscope):
-- count_pattern(pattern): Count cells whose 3-cell neighborhood matches 'pattern'
-  Pattern is a 3-character string: [left_neighbor, center, right_neighbor]
-  Examples:
-    count_pattern('AWB')  // Count positions with 'A' to left, 'W' at center, 'B' to right
-    count_pattern('WKW')  // Count K cells with W neighbors on both sides
-    count_pattern('AWA')  // Count 'W' cells between two A states
-
-  Use this to discover how local configurations predict future events.
-  For example, if count_pattern('AWB') at time t correlates with count('K') at t+1,
-  you've discovered something about when K states form.
-
 === TEMPLATES (claim structure types) ===
 
 - invariant: ∀t∈[0..T]: claim holds at every timestep
@@ -209,111 +165,43 @@ Neighborhood Window (local context microscope):
 - implication_step: ∀t∈[0..T-1]: P(t) → Q(t+1)
 - implication_state: ∀t∈[0..T]: P(t) → Q(t)
 - eventually: P(t0) → ∃t∈[t0..t0+H]: Q(t) within horizon H
-- symmetry_commutation: evolve(Transform(S), T) == Transform(evolve(S, T))
 - bound: ∀t∈[0..T]: f(t) op k
 - local_transition: ∀t,i: cell[i]==trigger → cell[i] satisfies result at t+1
-
-=== AVAILABLE TRANSFORMS ===
-
-Transforms can be applied to states. Their effects must be discovered empirically:
-- mirror_swap
-- shift_k (parameterized by integer k)
-- mirror_only
-- swap_only
 
 === LOCAL_TRANSITION TEMPLATE (MICRO-LEVEL RULES) ===
 
 For per-cell rules about what happens at individual positions:
 - Expresses: ∀t,i: if state[i] == trigger_symbol at t, then state[i] result_op result_symbol at t+1
-- You do NOT need count() functions or claim_ast for this template
 - The harness evaluates every cell index i automatically
 
 REQUIRED FIELDS for local_transition:
   "template": "local_transition",
-  "trigger_symbol": "<symbol>",    // The symbol at cell i at time t (one of: "W", "A", "B", "K")
+  "trigger_symbol": "<symbol>",    // The symbol at cell i at time t
   "result_op": "==" or "!=",       // How cell i compares at time t+1
   "result_symbol": "<symbol>",     // The expected symbol at cell i at time t+1
   "observables": [],               // Leave empty - not needed
-  "claim_ast": null,               // Leave null - the harness uses trigger/result fields directly
-
-OPTIONAL: neighbor_pattern for CONTEXT-DEPENDENT rules:
-  "neighbor_pattern": "<3-char>",  // The required neighborhood [left,center,right] (e.g., "AWB")
-
-OPTIONAL: required_parity for INDEX-PARITY rules:
-  "required_parity": 0 or 1,       // 0 = even indices only, 1 = odd indices only
-
-When neighbor_pattern is specified, the rule only applies to positions where
-neighbor_config(i) == neighbor_pattern.
-
-When required_parity is specified, the rule only applies to positions where
-i % 2 == required_parity. This enables parity-dependent rules like:
-"A-states at even indices become B" rather than "all A-states".
-
-You can combine both: neighbor_pattern AND required_parity for highly specific rules.
-
-EXAMPLES:
-  "Every K disappears immediately" → trigger_symbol="K", result_op="!=", result_symbol="K"
-  "W cells remain W" → trigger_symbol="W", result_op="==", result_symbol="W"
-  "A-states persist" → trigger_symbol="A", result_op="==", result_symbol="A"
-
-  CONTEXT-DEPENDENT (with neighbor_pattern):
-  "W cells with AWB neighborhood become K" → trigger_symbol="W", neighbor_pattern="AWB", result_op="==", result_symbol="K"
-  "A-states in AWW neighborhood stay A" → trigger_symbol="A", neighbor_pattern="AWW", result_op="==", result_symbol="A"
-
-  PARITY-DEPENDENT (with required_parity):
-  "A-states at even indices become B" → trigger_symbol="A", required_parity=0, result_op="==", result_symbol="B"
-  "B-states at odd indices become A" → trigger_symbol="B", required_parity=1, result_op="==", result_symbol="A"
-
-=== CLAIM AST FORMAT (REQUIRED) ===
-
-Claims must be structured JSON ASTs:
-
-AST Node Types:
-- Constant: {"const": 5}
-- Time variable: {"var": "t"}
-- Time t+1: {"t_plus_1": true}
-- Observable at time: {"obs": "<name>", "t": <time_node>}
-- Binary operation: {"op": "<op>", "lhs": <node>, "rhs": <node>}
-- Unary not: {"op": "not", "arg": <node>}
-
-Operators: +, -, *, /, ==, !=, <, <=, >, >=, =>, and, or, not
-
-=== DERIVED EXPRESSIONS ===
-
-You can combine primitives to create derived observables using: +, -, *
-Example: {"name": "combined", "expr": "count('>') + count('<')"}
-
-Experiment with different combinations to discover which quantities
-follow simple rules across state transitions.
-
-=== AST EXAMPLES ===
-
-Invariant "Q(t) == Q(0)":
-  {"op": "==", "lhs": {"obs": "Q", "t": {"var": "t"}}, "rhs": {"obs": "Q", "t": {"const": 0}}}
-
-Monotone "M(t+1) <= M(t)":
-  {"op": "<=", "lhs": {"obs": "M", "t": {"t_plus_1": true}}, "rhs": {"obs": "M", "t": {"var": "t"}}}
-
-Implication "P(t) > 0 => R(t+1) == 0":
-  {"op": "=>",
-   "lhs": {"op": ">", "lhs": {"obs": "P", "t": {"var": "t"}}, "rhs": {"const": 0}},
-   "rhs": {"op": "==", "lhs": {"obs": "R", "t": {"t_plus_1": true}}, "rhs": {"const": 0}}}
-
-For symmetry_commutation: include "transform" field, claim_ast can be null
+  "claim_ast": null,               // Leave null - harness uses trigger/result fields
 
 === OUTPUT FORMAT ===
 
 Your response MUST be a JSON object with these fields:
 
 {
+  "probes": [
+    {
+      "probe_id": "my_measurement",
+      "code": "def probe(S):\n    return sum(1 for c in S if c != 'W')",
+      "hypothesis": "Counts all non-background cells"
+    }
+  ],
   "research_log": "Your CUMULATIVE SUMMARY — a structured, living document you UPDATE each iteration (see below).",
   "candidate_laws": [
     {
       "law_id": "unique_identifier",
       "template": "invariant",
       "quantifiers": {"T": 50},
-      "observables": [{"name": "Q", "expr": "count('A') + count('B')"}],
-      "claim_ast": {"op": "==", "lhs": {"obs": "Q", "t": {"var": "t"}}, "rhs": {"obs": "Q", "t": {"const": 0}}},
+      "observables": [{"name": "Q", "probe_id": "my_measurement"}],
+      "claim": "Q is constant over time",
       "forbidden": "exists t where Q(t) != Q(0)",
       "proposed_tests": [{"family": "random_density_sweep", "params": {"cases": 100}}]
     }
@@ -322,6 +210,36 @@ Your response MUST be a JSON object with these fields:
     {"state": "WWABWWW", "T": 5}
   ]
 }
+
+PROBES are your instruments. You MUST define probes to measure the universe and
+reference them by probe_id in your observables. Each observable needs a "name"
+and a "probe_id" pointing to a probe you defined (either in this response or a
+previous iteration).
+
+=== CLAIM AST (for templates that need it) ===
+
+For invariant, monotone, and bound templates, the claim semantics are determined by
+the template type itself — you do not need to write a claim_ast.
+
+For implication_step, implication_state, and eventually templates, you need a claim_ast
+to express the logical relationship between your observables. The AST uses JSON nodes:
+
+  Constant:     {"const": 5}
+  Time var:     {"var": "t"}
+  Time t+1:     {"t_plus_1": true}
+  Observable:   {"obs": "<name>", "t": <time_node>}
+  Comparison:   {"op": "<op>", "lhs": <node>, "rhs": <node>}
+  Logical:      {"op": "=>", "lhs": <condition>, "rhs": <conclusion>}
+  Not:          {"op": "not", "arg": <node>}
+
+  Comparison operators: ==, !=, <, <=, >, >=
+  Logical operators: =>, and, or, not
+  Arithmetic: +, -, *
+
+Example — "P(t) > 0 implies Q(t+1) == 0":
+  {"op": "=>",
+   "lhs": {"op": ">", "lhs": {"obs": "P", "t": {"var": "t"}}, "rhs": {"const": 0}},
+   "rhs": {"op": "==", "lhs": {"obs": "Q", "t": {"t_plus_1": true}}, "rhs": {"const": 0}}}
 
 === SIMULATION REQUESTS (OPTIONAL) ===
 
@@ -384,6 +302,7 @@ class PromptBuilder:
         max_token_budget: int = 8000,
         include_counterexamples: bool = True,
         scrambler: "SymbolScrambler | None" = None,
+        probe_registry=None,
     ):
         """Initialize prompt builder.
 
@@ -391,9 +310,11 @@ class PromptBuilder:
             max_token_budget: Maximum tokens for prompt
             include_counterexamples: Whether to include counterexample gallery
             scrambler: Symbol scrambler for integrity shielding (optional)
+            probe_registry: Optional ProbeRegistry for probe-based discovery mode
         """
         self.max_token_budget = max_token_budget
         self.include_counterexamples = include_counterexamples
+        self._probe_registry = probe_registry
 
         # Initialize scrambler (use default if not provided)
         if scrambler is None:
@@ -460,8 +381,12 @@ class PromptBuilder:
         # Universe capabilities - this rarely changes
         sections.append(self._build_capabilities_section(contract))
 
-        # Expression language reminder
-        sections.append(self._build_expression_language_section())
+        # Probe system section (when probe registry is available)
+        if self._probe_registry is not None:
+            sections.append(self._build_probe_system_section())
+            probe_library = self._probe_registry.to_prompt_summary()
+            if probe_library:
+                sections.append(f"=== PROBE LIBRARY ===\n\n{probe_library}")
 
         # Priority research directions from reflection engine
         if memory.priority_research_directions:
@@ -497,54 +422,85 @@ class PromptBuilder:
 
         return "\n\n".join(sections)
 
-    def _build_expression_language_section(self) -> str:
-        """Build expression language and AST format reminder section.
+    def _build_probe_system_section(self) -> str:
+        """Build the PROBE SYSTEM section explaining probe-based measurement.
 
-        INTEGRITY NOTE: This section intentionally does NOT label any
-        expressions as "conserved" or suggest which combinations might
-        be invariant. The LLM must discover these through falsification.
-
-        Uses abstract symbols (_, A, B, K) to prevent inferring physics from glyphs.
+        This section tells the LLM how to write custom Python measurement functions
+        (probes) that run in a sandbox. Probes replace the fixed expression primitives
+        with arbitrary measurement logic.
         """
-        # Use abstract symbols from scrambler
         symbols = self._scrambler.abstract_symbols
-        return f"""=== CLAIM AST FORMAT ===
+        bg, c1, c2, kin = symbols[0], symbols[1], symbols[2], symbols[3]
+        return f"""=== PROBE SYSTEM (Your Measurement Instruments) ===
 
-Claims must be structured JSON ASTs. Observable expressions are defined separately.
+You can define CUSTOM MEASUREMENT FUNCTIONS (probes) that measure anything about a state.
+Probes are Python functions that take a state (list of single-character strings) and return a number.
 
-EXPRESSION PRIMITIVES:
-  count('{symbols[0]}'), count('{symbols[1]}'), count('{symbols[2]}'), count('{symbols[3]}')
-  count_even(sym), count_odd(sym)          // Grid-phase: count at even/odd indices
-  count_at_parity(sym, 0), count_at_parity(sym, 1)  // Explicit parity
-  count_pattern('{symbols[1]}{symbols[0]}{symbols[2]}'), count_pattern('{symbols[0]}{symbols[3]}{symbols[0]}')  // Neighborhood patterns (3-char)
-  grid_length
-  transition_indicator
-  leftmost(sym), rightmost(sym), spread(sym), max_gap(sym)
-  adjacent_pairs(s1, s2)
+HOW TO DEFINE A PROBE:
+Include a "probes" array in your JSON response:
+{{
+  "probes": [
+    {{
+      "probe_id": "total_particles",
+      "code": "def probe(S):\\n    return sum(1 for c in S if c != '{bg}')",
+      "hypothesis": "Counts all non-background cells"
+    }}
+  ],
+  "candidate_laws": [...]
+}}
 
-ARITHMETIC: +, -, * (division / is NOT supported - rewrite algebraically)
+HOW TO USE A PROBE IN A LAW:
+Reference the probe_id in your observable definition:
+{{
+  "observables": [
+    {{"name": "P", "probe_id": "total_particles"}}
+  ]
+}}
 
-CLAIM AST NODES:
-  Constant:     {{"const": 5}}
-  Time var:     {{"var": "t"}}
-  Time t+1:     {{"t_plus_1": true}}
-  Observable:   {{"obs": "<name>", "t": <time_node>}}
-  Binary op:    {{"op": "<op>", "lhs": <node>, "rhs": <node>}}
-  Unary not:    {{"op": "not", "arg": <node>}}
+SANDBOX RULES:
+- Your function MUST be named 'probe' and take 1 or 2 arguments
+- It MUST return an int or float
+- Allowed builtins: range, len, abs, min, max, float, int, sum, list, dict, tuple,
+  set, enumerate, zip, sorted, reversed, bool, str, round, any, all, map, filter, isinstance
+- NOT allowed: import, exec, eval, open, print, or any dunder (__) access
+- Maximum execution time: 100ms
 
-  Operators: +, -, *, /, ==, !=, <, <=, >, >=, =>, and, or, not
+THE STATE (S):
+- S is a list of single-character strings: ['{bg}', '{c1}', '{bg}', '{c2}', ...]
+- The symbols are: {bg}, {c1}, {c2}, {kin}
+- len(S) gives the grid length
+- S[i] gives the symbol at position i
 
-AST EXAMPLES:
+SINGLE-STATE PROBES (measuring one state):
+  "def probe(S):\\n    return sum(1 for c in S if c == '{c1}')"
+  → Counts {c1} symbols
 
-  Q(t) == Q(0) [compare Q at time t to Q at time 0]:
-    {{"op": "==", "lhs": {{"obs": "Q", "t": {{"var": "t"}}}}, "rhs": {{"obs": "Q", "t": {{"const": 0}}}}}}
+  "def probe(S):\\n    return sum(1 for i, c in enumerate(S) if c == '{c1}' and i % 2 == 0)"
+  → Counts {c1} at even indices
 
-  R(t) > 0 => S(t+1) == 0 [implication]:
-    {{"op": "=>",
-     "lhs": {{"op": ">", "lhs": {{"obs": "R", "t": {{"var": "t"}}}}, "rhs": {{"const": 0}}}},
-     "rhs": {{"op": "==", "lhs": {{"obs": "S", "t": {{"t_plus_1": true}}}}, "rhs": {{"const": 0}}}}}}
+  "def probe(S):\\n    pairs = 0\\n    for i in range(len(S)-1):\\n        if S[i] == '{c1}' and S[i+1] == '{c2}':\\n            pairs += 1\\n    return pairs"
+  → Counts adjacent {c1}{c2} pairs
 
-For symmetry_commutation: include "transform" field, claim_ast can be null."""
+  "def probe(S):\\n    n = len(S)\\n    return sum(1 for i in range(n) if S[i] == '{bg}' and S[(i-1) % n] == '{c1}' and S[(i+1) % n] == '{c2}')"
+  → Counts {bg} cells with {c1} on left and {c2} on right (periodic boundary)
+
+TEMPORAL PROBES (measuring transitions):
+You can define probes that see BOTH the current and next state:
+  "def probe(S_current, S_next):\\n    return sum(1 for a, b in zip(S_current, S_next) if a != b)"
+  → Counts how many cells changed between timesteps
+
+  "def probe(S_current, S_next):\\n    return sum(1 for a, b in zip(S_current, S_next) if a == '{bg}' and b != '{bg}')"
+  → Counts cells that went from background to non-background
+
+The system auto-detects 1-param vs 2-param probes from the function signature.
+Temporal probes measure how the universe CHANGES between timesteps — they cannot
+evaluate the last timestep (no "next" state available), so the harness skips it.
+
+IMPORTANT:
+- Probes are your ONLY instruments for measuring the universe
+- Each observable in a law MUST reference a probe_id
+- Probes you define persist across iterations — reuse them by probe_id
+- If a probe errors during registration, the law using it gets UNKNOWN verdict"""
 
     def get_system_instruction(self) -> str:
         """Get the system instruction for the LLM."""
@@ -554,36 +510,20 @@ For symmetry_commutation: include "transform" field, claim_ast can be null."""
         """Build universe capabilities section.
 
         Uses abstract symbols from scrambler to prevent physics inference.
+        Does NOT expose transforms, built-in observables, or test families
+        — the LLM must discover structure through probes.
         """
-        caps = contract.capabilities
         # Use abstract symbols instead of physical ones
         abstract_symbols = self._scrambler.abstract_symbols
         lines = [
             "=== UNIVERSE CAPABILITIES ===",
             f"Symbols: {', '.join(abstract_symbols)}",
             f"State: {contract.state_representation}",
+            f"Boundary: {contract.config_knobs.get('boundary', 'unknown')}",
+            f"Grid length range: {contract.config_knobs.get('grid_length_range', 'unknown')}",
             "",
-            "Primitive observables:",
+            "You measure the universe by writing Python probe functions (see PROBE SYSTEM).",
         ]
-        for obs in caps.get("primitive_observables", []):
-            # Scramble any symbols in observable descriptions
-            scrambled_obs = self._scramble_expr(obs)
-            lines.append(f"  - {scrambled_obs}")
-
-        lines.append("")
-        lines.append("Available transforms:")
-        for t in caps.get("transforms", []):
-            lines.append(f"  - {t}")
-
-        lines.append("")
-        lines.append("Test families:")
-        for g in caps.get("generator_families", []):
-            lines.append(f"  - {g}")
-
-        lines.append("")
-        lines.append("Config knobs:")
-        for k, v in contract.config_knobs.items():
-            lines.append(f"  - {k}: {v}")
 
         return "\n".join(lines)
 
@@ -641,6 +581,19 @@ rather than rewriting from scratch:
                     head = " -> ".join(sequence[:10])
                     tail = " -> ".join(sequence[-5:])
                     lines.append(f"   state_sequence: {head} -> ... -> {tail}")
+
+                # Include probe output table if available
+                probe_table = result.get("probe_outputs")
+                if probe_table and isinstance(probe_table, dict):
+                    lines.append("   probe_outputs:")
+                    for probe_id, values in probe_table.items():
+                        if isinstance(values, list) and len(values) <= 20:
+                            lines.append(f"     {probe_id}: {values}")
+                        elif isinstance(values, list):
+                            lines.append(
+                                f"     {probe_id}: [{', '.join(str(v) for v in values[:10])}, "
+                                f"..., {', '.join(str(v) for v in values[-3:])}]"
+                            )
             lines.append("")
         return "\n".join(lines)
 
@@ -660,13 +613,18 @@ rather than rewriting from scratch:
             # Scramble the claim text
             scrambled_claim = self._scramble_expr(claim) if claim else claim
             lines.append(f"- [{template}] {law_id}: {scrambled_claim}")
-            # Show observable definitions (scrambled) to prevent equivalent re-proposals
+            # Show observable definitions to prevent equivalent re-proposals
             if law.get("observables"):
-                obs_strs = [
-                    f"{o['name']}={self._scramble_expr(o['expr'])}"
-                    for o in law["observables"] if o
-                ]
-                lines.append(f"    observables: {', '.join(obs_strs)}")
+                obs_strs = []
+                for o in law["observables"]:
+                    if not o:
+                        continue
+                    if o.get("probe_id"):
+                        obs_strs.append(f"{o['name']}=probe:{o['probe_id']}")
+                    elif o.get("expr"):
+                        obs_strs.append(f"{o['name']}={self._scramble_expr(o['expr'])}")
+                if obs_strs:
+                    lines.append(f"    observables: {', '.join(obs_strs)}")
         return "\n".join(lines)
 
     def _build_falsified_section(self, laws: list[dict[str, Any]]) -> str:
@@ -879,57 +837,19 @@ rather than rewriting from scratch:
     def _build_microscale_guidance_section(self) -> str:
         """Build guidance suggesting micro-scale analysis.
 
-        INTEGRITY NOTE: This suggests the SCALE of inquiry (cells vs aggregates),
-        not the CONTENT of discovery. It's like saying "try the microscope"
-        without saying what you'll see through it.
-
-        Uses abstract symbols from scrambler.
+        Suggests the SCALE of inquiry (cells vs aggregates) without
+        hinting at what the LLM will find at that scale.
         """
-        # Get abstract symbols for examples
-        symbols = self._scrambler.abstract_symbols  # [_, A, B, K]
-        bg, c1, c2, kin = symbols[0], symbols[1], symbols[2], symbols[3]
+        return """=== METHODOLOGICAL SUGGESTION: MICRO-SCALE ANALYSIS ===
 
-        return f"""=== METHODOLOGICAL SUGGESTION: MICRO-SCALE ANALYSIS ===
-
-Your global observables (aggregate counts) may be missing important patterns.
+Your aggregate probe measurements may be missing important patterns.
 Consider using the local_transition template to observe individual cell behavior.
 
-KEY INSIGHT: Global counts cannot track IDENTITY. Even if a total count stays
-the same, individual cells may be changing in ways that matter.
+The local_transition template lets you test per-cell rules:
+  ∀t,i: if state[i] == trigger_symbol at t, then state[i] result_op result_symbol at t+1
 
-HOW TO USE local_transition:
 The harness automatically evaluates every cell index i across all timesteps t.
-You define WHAT to look for, the harness tests WHERE and WHEN.
-
-REQUIRED JSON FORMAT:
-{{
-  "law_id": "your_id",
-  "template": "local_transition",
-  "trigger_symbol": "{kin}",        // The symbol at cell i at time t
-  "result_op": "!=",            // Either "==" or "!="
-  "result_symbol": "{kin}",         // The expected symbol at cell i at time t+1
-  "neighbor_pattern": null,     // OPTIONAL: 3-char pattern like "{c1}{bg}{c2}" for context-dependent rules
-  "quantifiers": {{"T": 50}},
-  "preconditions": [],
-  "observables": [],            // Leave empty - not needed for this template
-  "claim_ast": null,            // Leave null - harness uses trigger/result fields
-  "claim": "Human-readable description",
-  "forbidden": "What would falsify this"
-}}
-
-OPTIONAL: For CONTEXT-DEPENDENT rules, add neighbor_pattern:
-  "neighbor_pattern": "{c1}{bg}{c2}"     // Rule only applies when neighbor_config(i)=="{c1}{bg}{c2}"
-
-OPTIONAL: For PARITY-DEPENDENT rules, add required_parity:
-  "required_parity": 0              // Rule only applies at even indices (i % 2 == 0)
-  "required_parity": 1              // Rule only applies at odd indices (i % 2 == 1)
-
-WHAT TO EXPLORE:
-- What happens to each symbol type from one timestep to the next?
-- Does a symbol at position i "become" a specific other symbol at position i?
-- Do neighborhood patterns (3-cell windows) determine what happens next?
-- Does index parity (even vs odd) affect transitions differently?
-- The simplest per-cell rule that survives falsification may reveal deeper structure."""
+You define WHAT to look for, the harness tests WHERE and WHEN."""
 
     def _build_request_section(
         self,

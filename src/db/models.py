@@ -407,6 +407,23 @@ class SevereTestCommandRecord:
 
 
 @dataclass
+class ProbeRecord:
+    """An LLM-written Python measurement function (probe)."""
+
+    probe_id: str
+    source: str
+    source_hash: str
+    status: str = "active"  # 'active', 'retired', 'error'
+    hypothesis: str | None = None
+    return_type: str = "float"
+    error_message: str | None = None
+    created_iteration: int | None = None
+    arity: int = 1  # 1 = single-state, 2 = temporal (transition)
+    id: int | None = None
+    created_at: datetime | None = None
+
+
+@dataclass
 class LLMTranscriptRecord:
     """A record of an LLM interaction for debugging and audit.
 

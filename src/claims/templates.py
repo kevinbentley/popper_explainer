@@ -63,23 +63,42 @@ class TemplateChecker(ABC):
 class InvariantChecker(TemplateChecker):
     """Checker for invariant template: f(t) == f(0) for all t."""
 
-    def __init__(self, observable_expr: Expr):
-        self.observable_expr = observable_expr
+    def __init__(self, observable_expr: Expr | None = None, *, observable_fn: Callable | None = None):
+        if observable_fn is not None:
+            self._eval = observable_fn
+            self._is_temporal = getattr(observable_fn, 'is_temporal', False)
+        elif observable_expr is not None:
+            self.observable_expr = observable_expr
+            self._eval = lambda state: evaluate_expression(self.observable_expr, state)
+            self._is_temporal = False
+        else:
+            raise ValueError("Must provide either observable_expr or observable_fn")
+
+    def _eval_at(self, trajectory: Trajectory, t: int) -> float | int:
+        """Evaluate the observable at time t, passing next_state for temporal probes."""
+        if self._is_temporal:
+            next_state = trajectory[t + 1] if t + 1 < len(trajectory) else None
+            return self._eval(trajectory[t], next_state=next_state)
+        return self._eval(trajectory[t])
 
     def check(self, trajectory: Trajectory) -> CheckResult:
         if not trajectory:
             return CheckResult(passed=True)
 
-        initial_value = evaluate_expression(self.observable_expr, trajectory[0])
+        end = len(trajectory) - 1 if self._is_temporal else len(trajectory)
+        if end <= 0:
+            return CheckResult(passed=True)
 
-        for t, state in enumerate(trajectory):
-            value = evaluate_expression(self.observable_expr, state)
+        initial_value = self._eval_at(trajectory, 0)
+
+        for t in range(end):
+            value = self._eval_at(trajectory, t)
             if value != initial_value:
                 return CheckResult(
                     passed=False,
                     violation=Violation(
                         t=t,
-                        state=state,
+                        state=trajectory[t],
                         details={"expected": initial_value, "actual": value},
                         message=f"Invariant violated at t={t}: expected {initial_value}, got {value}",
                     ),
@@ -91,18 +110,35 @@ class InvariantChecker(TemplateChecker):
 class MonotoneChecker(TemplateChecker):
     """Checker for monotone template: f(t+1) <= f(t) or f(t+1) >= f(t)."""
 
-    def __init__(self, observable_expr: Expr, direction: MonotoneDirection):
-        self.observable_expr = observable_expr
+    def __init__(self, observable_expr: Expr | None = None, direction: MonotoneDirection = MonotoneDirection.NON_INCREASING, *, observable_fn: Callable | None = None):
         self.direction = direction
+        if observable_fn is not None:
+            self._eval = observable_fn
+            self._is_temporal = getattr(observable_fn, 'is_temporal', False)
+        elif observable_expr is not None:
+            self.observable_expr = observable_expr
+            self._eval = lambda state: evaluate_expression(self.observable_expr, state)
+            self._is_temporal = False
+        else:
+            raise ValueError("Must provide either observable_expr or observable_fn")
+
+    def _eval_at(self, trajectory: Trajectory, t: int) -> float | int:
+        """Evaluate the observable at time t, passing next_state for temporal probes."""
+        if self._is_temporal:
+            next_state = trajectory[t + 1] if t + 1 < len(trajectory) else None
+            return self._eval(trajectory[t], next_state=next_state)
+        return self._eval(trajectory[t])
 
     def check(self, trajectory: Trajectory) -> CheckResult:
         if len(trajectory) < 2:
             return CheckResult(passed=True)
 
-        prev_value = evaluate_expression(self.observable_expr, trajectory[0])
+        end = len(trajectory) - 1 if self._is_temporal else len(trajectory)
 
-        for t in range(1, len(trajectory)):
-            curr_value = evaluate_expression(self.observable_expr, trajectory[t])
+        prev_value = self._eval_at(trajectory, 0)
+
+        for t in range(1, end):
+            curr_value = self._eval_at(trajectory, t)
 
             violated = False
             if self.direction == MonotoneDirection.NON_INCREASING:
@@ -134,12 +170,20 @@ class MonotoneChecker(TemplateChecker):
 class BoundChecker(TemplateChecker):
     """Checker for bound template: f(t) op k for all t."""
 
-    def __init__(self, observable_expr: Expr, op: ComparisonOp, bound: int):
-        self.observable_expr = observable_expr
+    def __init__(self, observable_expr: Expr | None = None, op: ComparisonOp = ComparisonOp.LE, bound: int = 0, *, observable_fn: Callable | None = None):
         self.op = op
         self.bound = bound
+        if observable_fn is not None:
+            self._eval = observable_fn
+            self._is_temporal = getattr(observable_fn, 'is_temporal', False)
+        elif observable_expr is not None:
+            self.observable_expr = observable_expr
+            self._eval = lambda state: evaluate_expression(self.observable_expr, state)
+            self._is_temporal = False
+        else:
+            raise ValueError("Must provide either observable_expr or observable_fn")
 
-    def _compare(self, value: int) -> bool:
+    def _compare(self, value: float | int) -> bool:
         """Check if value satisfies the bound."""
         if self.op == ComparisonOp.LE:
             return value <= self.bound
@@ -156,15 +200,24 @@ class BoundChecker(TemplateChecker):
         else:
             raise ValueError(f"Unknown comparison operator: {self.op}")
 
+    def _eval_at(self, trajectory: Trajectory, t: int) -> float | int:
+        """Evaluate the observable at time t, passing next_state for temporal probes."""
+        if self._is_temporal:
+            next_state = trajectory[t + 1] if t + 1 < len(trajectory) else None
+            return self._eval(trajectory[t], next_state=next_state)
+        return self._eval(trajectory[t])
+
     def check(self, trajectory: Trajectory) -> CheckResult:
-        for t, state in enumerate(trajectory):
-            value = evaluate_expression(self.observable_expr, state)
+        end = len(trajectory) - 1 if self._is_temporal else len(trajectory)
+
+        for t in range(end):
+            value = self._eval_at(trajectory, t)
             if not self._compare(value):
                 return CheckResult(
                     passed=False,
                     violation=Violation(
                         t=t,
-                        state=state,
+                        state=trajectory[t],
                         details={"value": value, "bound": self.bound, "op": self.op.value},
                         message=f"Bound violated at t={t}: {value} {self.op.value} {self.bound} is false",
                     ),

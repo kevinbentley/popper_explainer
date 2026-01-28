@@ -49,17 +49,25 @@ class Harness:
         verdict = harness.evaluate(law)
     """
 
-    def __init__(self, config: HarnessConfig | None = None, repo: Repository | None = None):
+    def __init__(self, config: HarnessConfig | None = None, repo: Repository | None = None,
+                 probe_registry=None, scrambler=None):
         """Initialize the harness.
 
         Args:
             config: Harness configuration
             repo: Optional database repository for persistence
+            probe_registry: Optional ProbeRegistry for probe-based observables
+            scrambler: Optional SymbolScrambler for physical<->abstract translation
         """
         self.config = config or HarnessConfig()
         self.repo = repo
-        self._evaluator = Evaluator()
-        self._minimizer = Minimizer(budget=self.config.minimization_budget)
+        self._probe_registry = probe_registry
+        self._evaluator = Evaluator(probe_registry=probe_registry, scrambler=scrambler)
+        self._minimizer = Minimizer(
+            budget=self.config.minimization_budget,
+            probe_registry=probe_registry,
+            scrambler=scrambler,
+        )
         self._adversarial = AdversarialSearcher(
             budget=self.config.adversarial_budget,
             max_runtime_ms=self.config.max_runtime_ms_per_law // 2,

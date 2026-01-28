@@ -183,18 +183,30 @@ class ASTCheckResult:
 class ASTClaimEvaluator:
     """Evaluates structured claim ASTs against trajectories."""
 
-    def __init__(self, law: CandidateLaw):
+    def __init__(self, law: CandidateLaw, probe_observables: dict[str, Callable] | None = None):
         """Initialize evaluator with a law.
 
         Args:
             law: The candidate law containing observables and claim_ast
+            probe_observables: Optional dict mapping observable name -> callable(state, next_state=None) -> number
+                               for probe-backed observables.
         """
         self.law = law
         self._parser = ExpressionParser()
+        self._probe_observables: dict[str, Callable] = probe_observables or {}
+        # Track which probe observables are temporal (arity=2)
+        self._temporal_probes: set[str] = {
+            name for name, fn in self._probe_observables.items()
+            if getattr(fn, 'is_temporal', False)
+        }
 
-        # Compile observable expressions
+        # Compile observable expressions (skip probe-backed ones)
         self._observable_exprs: dict[str, Expr] = {}
         for obs in law.observables:
+            if obs.name in self._probe_observables:
+                continue  # This observable is probe-backed
+            if not obs.expr:
+                continue  # No expr and not probe-backed; will error at eval time if referenced
             try:
                 self._observable_exprs[obs.name] = self._parser.parse(obs.expr)
             except Exception as e:
@@ -204,7 +216,7 @@ class ASTClaimEvaluator:
 
         # Validate the claim AST if present
         if law.claim_ast:
-            obs_names = set(self._observable_exprs.keys())
+            obs_names = set(self._observable_exprs.keys()) | set(self._probe_observables.keys())
             is_valid, errors = validate_claim_ast(law.claim_ast, obs_names)
             if not is_valid:
                 error_msgs = [f"{e.path}: {e.message}" for e in errors]
@@ -239,7 +251,7 @@ class ASTClaimEvaluator:
 
         elif "obs" in ast:
             obs_name = ast["obs"]
-            if obs_name not in self._observable_exprs:
+            if obs_name not in self._observable_exprs and obs_name not in self._probe_observables:
                 raise ASTEvaluationError(f"Unknown observable: {obs_name}")
 
             # Evaluate the time index
@@ -253,6 +265,24 @@ class ASTClaimEvaluator:
 
             # Evaluate the observable at that time
             state = trajectory[time_idx]
+
+            # Check probe-backed observables first
+            if obs_name in self._probe_observables:
+                try:
+                    if obs_name in self._temporal_probes:
+                        # Temporal probe needs next_state
+                        next_idx = time_idx + 1
+                        if next_idx < len(trajectory):
+                            next_state = trajectory[next_idx]
+                        else:
+                            next_state = None
+                        return self._probe_observables[obs_name](state, next_state=next_state)
+                    return self._probe_observables[obs_name](state)
+                except Exception as e:
+                    raise ASTEvaluationError(
+                        f"Probe observable '{obs_name}' evaluation failed: {e}"
+                    ) from e
+
             try:
                 return evaluate_expression(self._observable_exprs[obs_name], state)
             except EvaluationError as e:
@@ -655,11 +685,16 @@ class ASTClaimEvaluator:
             raise ASTEvaluationError(f"Unknown template: {template}")
 
 
-def create_ast_checker(law: CandidateLaw) -> ASTClaimEvaluator | None:
+def create_ast_checker(
+    law: CandidateLaw,
+    probe_observables: dict[str, Callable] | None = None,
+) -> ASTClaimEvaluator | None:
     """Create an AST checker for a law if it has claim_ast.
 
     Args:
         law: The candidate law
+        probe_observables: Optional dict mapping observable name -> callable
+                           for probe-backed observables.
 
     Returns:
         ASTClaimEvaluator if claim_ast is present and template is supported,
@@ -673,4 +708,4 @@ def create_ast_checker(law: CandidateLaw) -> ASTClaimEvaluator | None:
     if law.template == Template.SYMMETRY_COMMUTATION:
         return None
 
-    return ASTClaimEvaluator(law)
+    return ASTClaimEvaluator(law, probe_observables=probe_observables)

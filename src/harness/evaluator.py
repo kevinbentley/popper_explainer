@@ -22,8 +22,10 @@ class Evaluator:
     - Tracking vacuity
     """
 
-    def __init__(self):
-        self._compiler = ClaimCompiler()
+    def __init__(self, probe_registry=None, scrambler=None):
+        self._compiler = ClaimCompiler(probe_registry=probe_registry, scrambler=scrambler)
+        self._probe_registry = probe_registry
+        self._scrambler = scrambler
         self._checker: TemplateChecker | None = None
         self._ast_checker: ASTClaimEvaluator | None = None
         self._precondition_checkers: list[Callable[[State], bool]] = []
@@ -48,7 +50,18 @@ class Evaluator:
 
         # Try AST-based evaluation first (preferred)
         if law.claim_ast is not None:
-            self._ast_checker = create_ast_checker(law)
+            # Build probe_observables dict for AST path
+            probe_observables: dict[str, Callable] | None = None
+            if self._probe_registry is not None:
+                probe_observables = {}
+                for obs in law.observables:
+                    if obs.probe_id:
+                        fn = self._compiler._make_probe_evaluator(obs.probe_id)
+                        if fn is not None:
+                            probe_observables[obs.name] = fn
+                if not probe_observables:
+                    probe_observables = None
+            self._ast_checker = create_ast_checker(law, probe_observables=probe_observables)
         else:
             # Fall back to string-based compilation
             self._checker = self._compiler.compile(law)

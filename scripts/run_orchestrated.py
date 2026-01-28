@@ -123,6 +123,19 @@ def create_parser() -> argparse.ArgumentParser:
         help="Use mock LLM client (for testing)",
     )
 
+    parser.add_argument(
+        "--probe-mode",
+        action="store_true",
+        help="Enable probe mode: LLM writes Python measurement functions instead of using fixed expression primitives",
+    )
+
+    parser.add_argument(
+        "--verbose-log",
+        type=str,
+        default=None,
+        help="Path to verbose log file. When set, ALL LLM prompts (including system instructions) and responses are written to this file, and probe registration/execution events are printed to stderr.",
+    )
+
     return parser
 
 
@@ -239,11 +252,17 @@ def run_orchestration(args) -> int:
         for phase in Phase:
             config.max_phase_iterations[phase] = args.max_phase_iterations
 
+    # Create verbose logger if requested
+    verbose_logger = None
+    if args.verbose_log:
+        from src.verbose import VerboseLogger
+        verbose_logger = VerboseLogger(log_file=args.verbose_log)
+
     # Create LLM loggers for capturing all LLM interactions
     model_name = "gemini-3-flash" if not args.mock_llm else "mock"
-    proposer_logger = LLMLogger(repo, component="law_proposer", model_name=model_name)
-    theorem_logger = LLMLogger(repo, component="theorem_generator", model_name=model_name)
-    explanation_logger = LLMLogger(repo, component="explanation_generator", model_name=model_name)
+    proposer_logger = LLMLogger(repo, component="law_proposer", model_name=model_name, verbose_logger=verbose_logger)
+    theorem_logger = LLMLogger(repo, component="theorem_generator", model_name=model_name, verbose_logger=verbose_logger)
+    explanation_logger = LLMLogger(repo, component="explanation_generator", model_name=model_name, verbose_logger=verbose_logger)
 
     # Create components
     if args.mock_llm:
@@ -253,10 +272,17 @@ def run_orchestration(args) -> int:
         from src.proposer.client import GeminiClient, GeminiConfig
         llm_client = GeminiClient(GeminiConfig())
 
+    # Create probe registry if probe mode is enabled
+    probe_registry = None
+    if args.probe_mode:
+        from src.probes.registry import ProbeRegistry
+        probe_registry = ProbeRegistry(verbose_logger=verbose_logger)
+
     proposer = LawProposer(
         client=llm_client,
         config=ProposerConfig(verbose=args.verbose),
         llm_logger=proposer_logger,
+        probe_registry=probe_registry,
     )
 
     # Seed redundancy filter with existing laws from database
@@ -277,13 +303,14 @@ def run_orchestration(args) -> int:
     harness = Harness(
         config=HarnessConfig(),
         repo=repo,
+        probe_registry=probe_registry,
     )
 
     novelty_tracker = NoveltyTracker()
 
     # Create reflection engine for periodic auditor/theorist analysis
     from src.reflection.engine import ReflectionEngine
-    reflection_logger = LLMLogger(repo, component="reflection", model_name=model_name)
+    reflection_logger = LLMLogger(repo, component="reflection", model_name=model_name, verbose_logger=verbose_logger)
     reflection_engine = ReflectionEngine(
         client=llm_client,
         llm_logger=reflection_logger,
@@ -298,6 +325,7 @@ def run_orchestration(args) -> int:
         repo=repo,
         config=discovery_config,
         reflection_engine=reflection_engine,
+        probe_registry=probe_registry,
     )
 
     # Create theorem handler
@@ -353,7 +381,7 @@ def run_orchestration(args) -> int:
     )
 
     # Create engine and register all handlers
-    engine = OrchestratorEngine(repo=repo, config=config)
+    engine = OrchestratorEngine(repo=repo, config=config, probe_registry=probe_registry)
     engine.register_handler(discovery_handler)
     engine.register_handler(theorem_handler)
     engine.register_handler(explanation_handler)
@@ -384,6 +412,10 @@ def run_orchestration(args) -> int:
     print(f"Laws per iteration: {config.laws_per_iteration}")
     if args.num_workers > 1:
         print(f"Parallel workers: {args.num_workers}")
+    if args.probe_mode:
+        print(f"Probe mode: ENABLED")
+    if args.verbose_log:
+        print(f"Verbose log: {args.verbose_log}")
     print()
 
     try:

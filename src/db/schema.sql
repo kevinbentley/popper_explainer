@@ -706,3 +706,24 @@ CREATE INDEX IF NOT EXISTS idx_severe_test_run ON severe_test_commands(run_id);
 CREATE INDEX IF NOT EXISTS idx_severe_test_session ON severe_test_commands(reflection_session_id);
 CREATE INDEX IF NOT EXISTS idx_severe_test_consumed ON severe_test_commands(run_id, consumed);
 CREATE INDEX IF NOT EXISTS idx_severe_test_priority ON severe_test_commands(run_id, priority);
+
+-- =============================================================================
+-- Probes: LLM-written Python measurement functions
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS probes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    probe_id TEXT NOT NULL UNIQUE,
+    source TEXT NOT NULL,
+    hypothesis TEXT,
+    return_type TEXT DEFAULT 'float',
+    source_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    error_message TEXT,
+    created_iteration INTEGER,
+    arity INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_probes_status ON probes(status);
+CREATE INDEX IF NOT EXISTS idx_probes_hash ON probes(source_hash);

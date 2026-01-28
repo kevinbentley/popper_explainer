@@ -71,6 +71,7 @@ class LLMLogger:
     component: str
     model_name: str
     context: LLMLoggerContext = field(default_factory=LLMLoggerContext)
+    verbose_logger: Any = field(default=None, repr=False)
 
     def set_context(
         self,
@@ -156,6 +157,18 @@ class LLMLogger:
             duration_ms=duration_ms,
             error_message=error_message,
         )
+
+        # Verbose file logging
+        if self.verbose_logger is not None:
+            self.verbose_logger.log_llm_exchange(
+                component=self.component,
+                system_instruction=system_instruction,
+                prompt=prompt,
+                response=response,
+                duration_ms=duration_ms,
+                success=success,
+                error_message=error_message,
+            )
 
         return self.repo.insert_llm_transcript(record)
 

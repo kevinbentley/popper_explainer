@@ -42,6 +42,7 @@ class ParseResult:
         rejections: Laws that failed parsing with reasons
         warnings: Non-fatal issues encountered
         research_log: LLM's research notes for continuity across iterations
+        probes: Probe definitions extracted from the response
     """
 
     laws: list[CandidateLaw] = field(default_factory=list)
@@ -49,6 +50,7 @@ class ParseResult:
     warnings: list[str] = field(default_factory=list)
     research_log: str | None = None
     simulation_requests: list[dict[str, Any]] = field(default_factory=list)
+    probes: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ResponseParser:
@@ -57,16 +59,19 @@ class ResponseParser:
     VALID_TEMPLATES = {t.value for t in Template}
     VALID_OPS = {"==", "!=", "<", "<=", ">", ">="}
 
-    def __init__(self, strict: bool = False, scrambler: "SymbolScrambler | None" = None):
+    def __init__(self, strict: bool = False, scrambler: "SymbolScrambler | None" = None,
+                 probe_registry=None):
         """Initialize parser.
 
         Args:
             strict: If True, reject laws with any issues. If False, try to fix minor issues.
             scrambler: Symbol scrambler for translating abstract→physical symbols.
                       If provided, all parsed laws will have their symbols translated.
+            probe_registry: Optional ProbeRegistry for registering probes from LLM responses.
         """
         self.strict = strict
         self._warnings: list[str] = []  # Accumulated warnings from parsing
+        self._probe_registry = probe_registry
 
         # Initialize scrambler (use default if not provided)
         if scrambler is None:
@@ -149,6 +154,31 @@ class ResponseParser:
                         result.simulation_requests.append({"state": state, "T": t_val})
                 else:
                     result.warnings.append("simulation_requests should be a list")
+
+            # Extract and register probes BEFORE parsing laws
+            if "probes" in data and isinstance(data["probes"], list):
+                for probe_data in data["probes"]:
+                    if not isinstance(probe_data, dict):
+                        result.warnings.append("probe entry is not an object, skipping")
+                        continue
+                    probe_id = probe_data.get("probe_id")
+                    code = probe_data.get("code")
+                    hypothesis = probe_data.get("hypothesis", "")
+                    if not probe_id or not code:
+                        result.warnings.append(f"probe missing probe_id or code, skipping: {probe_data}")
+                        continue
+                    result.probes.append(probe_data)
+                    # Register in ProbeRegistry if available
+                    if self._probe_registry is not None:
+                        defn = self._probe_registry.register(
+                            probe_id=probe_id,
+                            source=code,
+                            hypothesis=hypothesis,
+                        )
+                        if defn.status == "error":
+                            result.warnings.append(
+                                f"Probe '{probe_id}' registered with error: {defn.error_message}"
+                            )
 
             # Extract candidate_laws
             if "candidate_laws" in data:
@@ -473,24 +503,38 @@ class ResponseParser:
         return result
 
     def _parse_observables(self, data: list[dict[str, Any]]) -> list[Observable]:
-        """Parse observables from data."""
+        """Parse observables from data.
+
+        Supports both expression-backed and probe-backed observables:
+        - Expression: {"name": "R", "expr": "count('>')"}
+        - Probe: {"name": "R", "probe_id": "my_probe"}
+        - Both: {"name": "R", "expr": "count('>')", "probe_id": "my_probe"}
+          (probe_id takes precedence during evaluation)
+        """
         result = []
         for o in data:
             if not isinstance(o, dict):
                 continue
-            if "name" not in o or "expr" not in o:
+            if "name" not in o:
+                continue
+
+            probe_id = o.get("probe_id")
+            expr = o.get("expr", "")
+
+            # If probe-based observable, expr is optional
+            if not probe_id and not expr:
                 continue
 
             # Handle expr that might be a dict (AST format) instead of a string
-            expr = o["expr"]
             if isinstance(expr, dict):
                 expr = self._ast_expr_to_string(expr)
             else:
-                expr = str(expr)
+                expr = str(expr) if expr else ""
 
             result.append(Observable(
                 name=str(o["name"]),
                 expr=expr,
+                probe_id=probe_id,
             ))
         return result
 

@@ -34,6 +34,7 @@ from src.db.models import (
     LLMTranscriptRecord,
     NoveltySnapshotRecord,
     ObservableProposalRecord,
+    ProbeRecord,
     ReflectionSessionRecord,
     SevereTestCommandRecord,
     StandardModelRecord,
@@ -92,6 +93,14 @@ class Repository:
 
         cursor = self.conn.cursor()
         cursor.executescript(schema_sql)
+
+        # Migrate: add arity column to probes table if missing (for old DBs)
+        cursor.execute("PRAGMA table_info(probes)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "arity" not in columns:
+            cursor.execute(
+                "ALTER TABLE probes ADD COLUMN arity INTEGER NOT NULL DEFAULT 1"
+            )
 
         # Check/set schema version
         cursor.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
@@ -3527,5 +3536,92 @@ class Repository:
             priority=row["priority"],
             consumed=bool(row["consumed"]),
             consumed_at=row["consumed_at"],
+            created_at=row["created_at"],
+        )
+
+    # =================================================================
+    # Probes: LLM-written Python measurement functions
+    # =================================================================
+
+    def insert_probe(self, probe: ProbeRecord) -> int:
+        """Insert a probe record. Returns the new row ID."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO probes
+                (probe_id, source, hypothesis, return_type, source_hash,
+                 status, error_message, created_iteration, arity)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                probe.probe_id,
+                probe.source,
+                probe.hypothesis,
+                probe.return_type,
+                probe.source_hash,
+                probe.status,
+                probe.error_message,
+                probe.created_iteration,
+                probe.arity,
+            ),
+        )
+        self.conn.commit()
+        return cursor.lastrowid  # type: ignore[return-value]
+
+    def get_probe(self, probe_id: str) -> ProbeRecord | None:
+        """Get a probe by its probe_id."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM probes WHERE probe_id = ?", (probe_id,))
+        row = cursor.fetchone()
+        return self._row_to_probe(row) if row else None
+
+    def list_probes(
+        self, status: str | None = None, limit: int = 1000
+    ) -> list[ProbeRecord]:
+        """List probes, optionally filtered by status."""
+        cursor = self.conn.cursor()
+        if status:
+            cursor.execute(
+                "SELECT * FROM probes WHERE status = ? ORDER BY created_at LIMIT ?",
+                (status, limit),
+            )
+        else:
+            cursor.execute(
+                "SELECT * FROM probes ORDER BY created_at LIMIT ?",
+                (limit,),
+            )
+        return [self._row_to_probe(row) for row in cursor.fetchall()]
+
+    def update_probe_status(
+        self, probe_id: str, status: str, error_message: str | None = None
+    ) -> None:
+        """Update the status (and optional error message) of a probe."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE probes SET status = ?, error_message = ?
+            WHERE probe_id = ?
+            """,
+            (status, error_message, probe_id),
+        )
+        self.conn.commit()
+
+    def _row_to_probe(self, row: sqlite3.Row) -> ProbeRecord:
+        # Use dict-style access with fallback for old DBs without arity column
+        try:
+            arity = row["arity"]
+        except (IndexError, KeyError):
+            arity = 1
+        return ProbeRecord(
+            id=row["id"],
+            probe_id=row["probe_id"],
+            source=row["source"],
+            hypothesis=row["hypothesis"],
+            return_type=row["return_type"],
+            source_hash=row["source_hash"],
+            status=row["status"],
+            error_message=row["error_message"],
+            created_iteration=row["created_iteration"],
+            arity=arity,
             created_at=row["created_at"],
         )

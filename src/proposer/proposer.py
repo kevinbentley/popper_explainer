@@ -116,6 +116,7 @@ class LawProposer:
         contract: UniverseContract | None = None,
         config: ProposerConfig | None = None,
         llm_logger: LLMLogger | None = None,
+        probe_registry=None,
     ):
         """Initialize law proposer.
 
@@ -124,17 +125,23 @@ class LawProposer:
             contract: Universe contract (defaults to standard kinetic grid)
             config: Proposer configuration
             llm_logger: Optional LLM logger for capturing all LLM interactions
+            probe_registry: Optional ProbeRegistry for probe-based discovery
         """
         self.client = client or GeminiClient()
         self.contract = contract or UniverseContract()
         self.config = config or ProposerConfig()
         self._llm_logger = llm_logger
+        self._probe_registry = probe_registry
 
         self._prompt_builder = PromptBuilder(
             max_token_budget=self.config.max_token_budget,
             include_counterexamples=self.config.include_counterexamples,
+            probe_registry=probe_registry,
         )
-        self._parser = ResponseParser(strict=self.config.strict_parsing)
+        self._parser = ResponseParser(
+            strict=self.config.strict_parsing,
+            probe_registry=probe_registry,
+        )
         self._redundancy = RedundancyDetector()
         self._ranking = RankingModel(redundancy_detector=self._redundancy)
 
@@ -202,6 +209,7 @@ class LawProposer:
         self._last_prompt = prompt
         self._last_response = ""
 
+        print(f"  Calling LLM ({prompt_tokens} est. tokens) ...", flush=True)
         llm_start = time.time()
         try:
             response = self.client.generate(
@@ -211,8 +219,10 @@ class LawProposer:
             )
             self._last_response = response
             llm_duration_ms = int((time.time() - llm_start) * 1000)
+            print(f"  LLM responded ({llm_duration_ms}ms, ~{len(response)//4} tokens)")
         except Exception as e:
             llm_duration_ms = int((time.time() - llm_start) * 1000)
+            print(f"  LLM FAILED after {llm_duration_ms}ms: {e}")
 
             # Log failed LLM call
             if self._llm_logger:

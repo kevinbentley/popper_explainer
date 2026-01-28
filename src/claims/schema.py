@@ -65,10 +65,16 @@ class Precondition(BaseModel):
 
 
 class Observable(BaseModel):
-    """A named observable with its expression definition."""
+    """A named observable with its expression definition.
+
+    Observables can be backed by either:
+    1. An expression string (legacy) - parsed and evaluated by ExpressionParser
+    2. A probe_id reference (new) - executed via ProbeRegistry sandbox
+    """
 
     name: str = Field(description="Observable name (e.g., 'R_total')")
-    expr: str = Field(description="Expression (e.g., \"count('>') + count('X')\")")
+    expr: str = Field(default="", description="Expression (e.g., \"count('>') + count('X')\")")
+    probe_id: str | None = Field(default=None, description="Reference to probe registry (new probe system)")
 
 
 class ProposedTest(BaseModel):

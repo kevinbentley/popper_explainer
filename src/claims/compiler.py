@@ -75,9 +75,58 @@ class ASTCheckerAdapter(TemplateChecker):
 class ClaimCompiler:
     """Compiles CandidateLaw objects into executable TrajectoryCheckers."""
 
-    def __init__(self):
+    def __init__(self, probe_registry=None, scrambler=None):
+        """Initialize the compiler.
+
+        Args:
+            probe_registry: Optional ProbeRegistry for probe-based observables.
+            scrambler: Optional SymbolScrambler for physical<->abstract translation.
+        """
         self._parser = ExpressionParser()
         self._compiled_observables: dict[str, Expr] = {}
+        self._probe_registry = probe_registry
+        self._scrambler = scrambler
+        self._observable_fns: dict[str, Callable[[State], float | int]] = {}
+
+    def _make_probe_evaluator(self, probe_id: str) -> Callable | None:
+        """Create a callable that executes a probe on a state.
+
+        For single-state probes (arity=1): returns callable(state) -> number.
+        For temporal probes (arity=2): returns callable(state, next_state=None) -> number,
+        tagged with fn.is_temporal = True.
+
+        If a scrambler is configured, translates the physical state to abstract
+        symbols before passing to the probe (probes are written in abstract space).
+
+        Returns None if the probe cannot be found or is not active.
+        """
+        defn = self._probe_registry.get(probe_id)
+        if defn is None or defn.status != "active":
+            return None
+
+        source = defn.source
+        scrambler = self._scrambler
+        is_temporal = defn.arity == 2
+
+        def evaluate(state: State, next_state: State | None = None) -> float | int:
+            # Translate physical state to abstract symbols if scrambler available
+            if scrambler is not None:
+                translated = list(scrambler.to_abstract("".join(state)))
+            else:
+                translated = list(state)
+
+            translated_next = None
+            if is_temporal and next_state is not None:
+                if scrambler is not None:
+                    translated_next = list(scrambler.to_abstract("".join(next_state)))
+                else:
+                    translated_next = list(next_state)
+
+            from src.probes.sandbox import execute_probe
+            return execute_probe(source, translated, next_state=translated_next)
+
+        evaluate.is_temporal = is_temporal  # type: ignore[attr-defined]
+        return evaluate
 
     def compile(self, law: CandidateLaw) -> TemplateChecker:
         """Compile a candidate law into a trajectory checker.
@@ -94,21 +143,53 @@ class ClaimCompiler:
         # Try AST-based compilation first if claim_ast is present
         # This handles structured claims from the LLM more robustly
         if law.claim_ast is not None:
-            ast_evaluator = create_ast_checker(law)
+            # Build probe_observables for AST path
+            probe_obs: dict[str, Callable] | None = None
+            if self._probe_registry is not None:
+                probe_obs = {}
+                for obs in law.observables:
+                    if obs.probe_id:
+                        fn = self._make_probe_evaluator(obs.probe_id)
+                        if fn is not None:
+                            probe_obs[obs.name] = fn
+                if not probe_obs:
+                    probe_obs = None
+            ast_evaluator = create_ast_checker(law, probe_observables=probe_obs)
             if ast_evaluator is not None:
                 return ASTCheckerAdapter(ast_evaluator)
 
         # Fall back to string-based compilation
-        # First, compile all observable expressions
+        # First, compile all observable expressions (or build probe callables)
         self._compiled_observables = {}
+        self._observable_fns = {}
         for obs in law.observables:
-            try:
-                expr = self._parser.parse(obs.expr)
-                self._compiled_observables[obs.name] = expr
-            except ParseError as e:
+            if obs.probe_id and self._probe_registry:
+                # Probe-based observable: create a callable
+                fn = self._make_probe_evaluator(obs.probe_id)
+                if fn is not None:
+                    self._observable_fns[obs.name] = fn
+                    continue
+                # Probe failed (errored/retired/missing) — fall through to expr
+                if not obs.expr:
+                    # No expression fallback either — compilation fails
+                    defn = self._probe_registry.get(obs.probe_id)
+                    msg = defn.error_message if defn else "probe not found"
+                    raise CompilationError(
+                        f"Observable '{obs.name}' references probe "
+                        f"'{obs.probe_id}' which is not active: {msg}"
+                    )
+            if obs.expr:
+                try:
+                    expr = self._parser.parse(obs.expr)
+                    self._compiled_observables[obs.name] = expr
+                except ParseError as e:
+                    raise CompilationError(
+                        f"Failed to parse observable '{obs.name}': {obs.expr}\n{e}"
+                    ) from e
+            elif not obs.probe_id:
                 raise CompilationError(
-                    f"Failed to parse observable '{obs.name}': {obs.expr}\n{e}"
-                ) from e
+                    f"Observable '{obs.name}' has neither expr nor probe_id"
+                )
 
         # Dispatch to template-specific compiler
         if law.template == Template.INVARIANT:
@@ -138,6 +219,12 @@ class ClaimCompiler:
             )
 
         obs = law.observables[0]
+        if obs.name in self._observable_fns:
+            return InvariantChecker(observable_fn=self._observable_fns[obs.name])
+        if obs.name not in self._compiled_observables:
+            raise CompilationError(
+                f"Observable '{obs.name}' was not compiled (probe_id={obs.probe_id}, expr={obs.expr!r})"
+            )
         expr = self._compiled_observables[obs.name]
         return InvariantChecker(expr)
 
@@ -152,6 +239,12 @@ class ClaimCompiler:
             raise CompilationError("Monotone template requires 'direction' field")
 
         obs = law.observables[0]
+        if obs.name in self._observable_fns:
+            return MonotoneChecker(direction=law.direction, observable_fn=self._observable_fns[obs.name])
+        if obs.name not in self._compiled_observables:
+            raise CompilationError(
+                f"Observable '{obs.name}' was not compiled (probe_id={obs.probe_id}, expr={obs.expr!r})"
+            )
         expr = self._compiled_observables[obs.name]
         return MonotoneChecker(expr, law.direction)
 
@@ -169,6 +262,12 @@ class ClaimCompiler:
             raise CompilationError("Bound template requires 'bound_op' field")
 
         obs = law.observables[0]
+        if obs.name in self._observable_fns:
+            return BoundChecker(op=law.bound_op, bound=law.bound_value, observable_fn=self._observable_fns[obs.name])
+        if obs.name not in self._compiled_observables:
+            raise CompilationError(
+                f"Observable '{obs.name}' was not compiled (probe_id={obs.probe_id}, expr={obs.expr!r})"
+            )
         expr = self._compiled_observables[obs.name]
         return BoundChecker(expr, law.bound_op, law.bound_value)
 

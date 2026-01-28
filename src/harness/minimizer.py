@@ -21,14 +21,16 @@ class Minimizer:
     3. Reduce time horizon to earliest failure
     """
 
-    def __init__(self, budget: int = 100):
+    def __init__(self, budget: int = 100, probe_registry=None, scrambler=None):
         """Initialize minimizer.
 
         Args:
             budget: Maximum minimization attempts
+            probe_registry: Optional ProbeRegistry for probe-based observables
+            scrambler: Optional SymbolScrambler for physical<->abstract translation
         """
         self.budget = budget
-        self._evaluator = Evaluator()
+        self._evaluator = Evaluator(probe_registry=probe_registry, scrambler=scrambler)
 
     def minimize(
         self,

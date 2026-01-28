@@ -93,6 +93,7 @@ class DiscoveryPhaseHandler:
         repo: Repository | None = None,
         config: DiscoveryPhaseConfig | None = None,
         reflection_engine: ReflectionEngine | None = None,
+        probe_registry=None,
     ):
         """Initialize discovery handler.
 
@@ -103,6 +104,7 @@ class DiscoveryPhaseHandler:
             repo: Optional repository for persistence
             config: Phase configuration (num_workers, etc.)
             reflection_engine: Optional reflection engine for periodic analysis
+            probe_registry: Optional ProbeRegistry for probe-based discovery
         """
         self.proposer = proposer
         self.harness = harness
@@ -110,6 +112,7 @@ class DiscoveryPhaseHandler:
         self.repo = repo
         self.config = config or DiscoveryPhaseConfig()
         self.reflection_engine = reflection_engine
+        self._probe_registry = probe_registry
         self._discovery_iteration_count: int = 0
 
     @property
@@ -568,11 +571,23 @@ class DiscoveryPhaseHandler:
             try:
                 tool_result = tool.execute(state=state, T=t_val)
                 if tool_result.success:
-                    results.append({
+                    result_entry: dict[str, Any] = {
                         "state": state,
                         "T": t_val,
                         "state_sequence": tool_result.data.get("state_sequence", []),
-                    })
+                    }
+                    # Run active probes on each state in the trajectory
+                    if self._probe_registry is not None:
+                        sequence = result_entry["state_sequence"]
+                        probe_outputs: dict[str, list] = {}
+                        for s in sequence:
+                            state_list = list(s)
+                            probe_values = self._probe_registry.execute_all_active(state_list)
+                            for pid, val in probe_values.items():
+                                probe_outputs.setdefault(pid, []).append(val)
+                        if probe_outputs:
+                            result_entry["probe_outputs"] = probe_outputs
+                    results.append(result_entry)
                 else:
                     results.append({
                         "state": state,
@@ -945,6 +960,17 @@ class DiscoveryPhaseHandler:
                     "observables": law_dict.get("observables", []),
                     "forbidden": law_dict.get("forbidden", ""),
                 }
+                # Include probe source for failed laws (so LLM can debug instruments)
+                if self._probe_registry is not None:
+                    probe_sources = {}
+                    for obs in law_dict.get("observables", []):
+                        pid = obs.get("probe_id")
+                        if pid:
+                            defn = self._probe_registry.get(pid)
+                            if defn:
+                                probe_sources[pid] = defn.source
+                    if probe_sources:
+                        entry["probe_sources"] = probe_sources
                 cex = context.repo.get_counterexample_for_evaluation(ev.id)
                 if cex:
                     entry["counterexample"] = {

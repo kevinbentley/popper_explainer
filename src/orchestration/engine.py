@@ -79,6 +79,7 @@ class OrchestratorEngine:
         repo: Repository,
         config: OrchestratorConfig | None = None,
         handlers: dict[Phase, PhaseHandler] | None = None,
+        probe_registry=None,
     ):
         """Initialize the orchestration engine.
 
@@ -86,10 +87,12 @@ class OrchestratorEngine:
             repo: Database repository for persistence
             config: Orchestrator configuration
             handlers: Phase handlers (will use defaults if not provided)
+            probe_registry: Optional ProbeRegistry for probe-based discovery
         """
         self.repo = repo
         self.config = config or OrchestratorConfig()
         self.handlers: dict[Phase, PhaseHandler] = handlers or {}
+        self._probe_registry = probe_registry
 
         self.readiness_computer = ReadinessComputer(repo)
         self.transition_policy = TransitionPolicy(config)
@@ -208,6 +211,10 @@ class OrchestratorEngine:
         if run_record.status == "completed":
             raise ValueError(f"Run {run_id} is already completed")
 
+        # Load probes from DB on resume
+        if self._probe_registry is not None:
+            self._probe_registry.load_from_db(self.repo)
+
         # Get latest iteration
         latest_iter = self.repo.get_latest_iteration(run_id)
         iteration_index = (latest_iter.iteration_index + 1) if latest_iter else 0
@@ -284,6 +291,13 @@ class OrchestratorEngine:
         iter_id = self.repo.insert_orchestration_iteration(iteration_record)
 
         try:
+            phase_name = state.current_phase.value
+            phase_iter = state.get_phase_iterations(state.current_phase)
+            print(
+                f"[Iteration {state.iteration_index}] "
+                f"Phase: {phase_name} (phase iter {phase_iter}) ..."
+            )
+
             # Build context
             context = self._build_context()
 
@@ -305,6 +319,11 @@ class OrchestratorEngine:
                 control_block.phase_name = state.current_phase.value
                 control_block.iteration_number = state.iteration_index
 
+            # Print control block summary
+            print(
+                f"  {control_block.readiness_justification}"
+            )
+
             # Compute objective readiness
             readiness = self.readiness_computer.compute_for_phase(
                 state.run_id,
@@ -324,6 +343,19 @@ class OrchestratorEngine:
                 readiness,
                 control_block,
             )
+
+            print(
+                f"  Readiness: {readiness.combined_score * 100:.1f}% "
+                f"(pass={readiness.s_pass:.2f}, "
+                f"stability={readiness.s_stability:.2f}, "
+                f"novelty={readiness.s_novel_cex:.2f})"
+            )
+
+            if decision.should_transition:
+                print(
+                    f"  -> TRANSITION to {decision.target_phase.value} "
+                    f"({decision.reason})"
+                )
 
             # Persist iteration
             self._persist_iteration(
